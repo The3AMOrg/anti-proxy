@@ -1,41 +1,27 @@
-plugins {
-    alias(libs.plugins.android.application)
-}
+apply(plugin = "com.android.application")
 
-android {
+configure<com.android.build.api.dsl.ApplicationExtension> {
     namespace = "org.ap.protocol"
-    compileSdk {
-        version = release(37)
-    }
+    compileSdk = 35
 
     defaultConfig {
         applicationId = "org.ap.protocol"
-        minSdk = 24
-        targetSdk = 37
+        minSdk = 26
+        targetSdk = 35
         versionCode = 1
         versionName = "1.0"
-
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
-    buildTypes {
-        release {
-            optimization {
-                enable = false
-            }
-        }
-    }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_11
-        targetCompatibility = JavaVersion.VERSION_11
+        sourceCompatibility = JavaVersion.VERSION_17
+        targetCompatibility = JavaVersion.VERSION_17
     }
 }
 
 dependencies {
-    implementation(libs.androidx.appcompat)
-    implementation(libs.androidx.core.ktx)
-    implementation(libs.material)
-    testImplementation(libs.junit)
-    androidTestImplementation(libs.androidx.espresso.core)
-    androidTestImplementation(libs.androidx.junit)
+    "implementation"(project(":core"))
+    "implementation"("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
+    "implementation"("androidx.core:core-ktx:1.15.0")
+    "implementation"("androidx.appcompat:appcompat:1.6.1")
+    "implementation"("com.google.android.material:material:1.10.0")
 }

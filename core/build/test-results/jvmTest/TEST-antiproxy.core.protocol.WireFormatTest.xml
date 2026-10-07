@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="WireFormatTest[jvm]" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-07T16:24:46.971Z" hostname="sandbox" time="0.004">
+  <properties/>
+  <testcase name="testBytes[jvm]" classname="antiproxy.core.protocol.WireFormatTest" time="0.0"/>
+  <testcase name="testBounds[jvm]" classname="antiproxy.core.protocol.WireFormatTest" time="0.003"/>
+  <testcase name="testUInt16BE[jvm]" classname="antiproxy.core.protocol.WireFormatTest" time="0.0"/>
+  <testcase name="testUInt32BE[jvm]" classname="antiproxy.core.protocol.WireFormatTest" time="0.0"/>
+  <testcase name="testUInt64BE[jvm]" classname="antiproxy.core.protocol.WireFormatTest" time="0.001"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="FragmentCodecTest[jvm]" tests="4" skipped="0" failures="0" errors="0" timestamp="2026-10-07T16:24:46.962Z" hostname="sandbox" time="0.001">
+  <properties/>
+  <testcase name="testFragmentPayload[jvm]" classname="antiproxy.core.protocol.FragmentCodecTest" time="0.0"/>
+  <testcase name="testInvalidFragments[jvm]" classname="antiproxy.core.protocol.FragmentCodecTest" time="0.001"/>
+  <testcase name="testFragmentPayloadExact[jvm]" classname="antiproxy.core.protocol.FragmentCodecTest" time="0.0"/>
+  <testcase name="testRoundTrip[jvm]" classname="antiproxy.core.protocol.FragmentCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>

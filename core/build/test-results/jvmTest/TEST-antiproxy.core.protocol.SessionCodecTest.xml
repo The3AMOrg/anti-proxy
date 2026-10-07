@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuite name="SessionCodecTest[jvm]" tests="5" skipped="0" failures="0" errors="0" timestamp="2026-10-07T16:24:46.968Z" hostname="sandbox" time="0.001">
+  <properties/>
+  <testcase name="testInvalidVersion[jvm]" classname="antiproxy.core.protocol.SessionCodecTest" time="0.0"/>
+  <testcase name="testInvalidLength[jvm]" classname="antiproxy.core.protocol.SessionCodecTest" time="0.001"/>
+  <testcase name="testSessionBodySize[jvm]" classname="antiproxy.core.protocol.SessionCodecTest" time="0.0"/>
+  <testcase name="testRoundTrip[jvm]" classname="antiproxy.core.protocol.SessionCodecTest" time="0.0"/>
+  <testcase name="testTimestamps[jvm]" classname="antiproxy.core.protocol.SessionCodecTest" time="0.0"/>
+  <system-out><![CDATA[]]></system-out>
+  <system-err><![CDATA[]]></system-err>
+</testsuite>
