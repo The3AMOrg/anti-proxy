@@ -1,155 +1,81 @@
-# AntiProxy: Ultra-Fast Offline BLE Attendance Verification System
+# AntiProxy
 
-**AntiProxy** is a production-grade, local-first academic attendance verification system built for Android. It enforces **verifiable physical presence** without relying on internet access, cloud databases, QR codes, or central server connectivity during attendance sessions.
+AntiProxy is an Android application for taking classroom attendance over Bluetooth Low Energy (BLE) without needing internet connectivity.
 
-By pairing **hardware-backed asymmetric cryptography (ECDSA P-256)** with **ultra-ephemeral Bluetooth Low Energy (BLE) GATT exchanges** and **scan-time statistical RSSI gating**, AntiProxy completely eliminates remote proxy attempts (such as students sharing nonces or QR codes over messaging apps).
-
----
-
-## 🚀 Key Capabilities & Design Innovations
-
-### 1. 100% Offline & Local-First Verification
-- Verification occurs directly peer-to-peer between the **Instructor (Authority)** and **Student** devices over BLE.
-- Zero reliance on Wi-Fi, cellular networks, DNS, or backend cloud servers inside the classroom.
-- Durable local ledger powered by SQLite with **Write-Ahead Logging (WAL)** and an atomic pre-ACK commit invariant.
-
-### 2. Elimination of Remote Proxy / Relay Attacks
-- In naive beacon/QR systems, a student in class can text a code or nonce to absent peers in dorms.
-- AntiProxy requires the student device to establish a direct local **BLE GATT physical connection** with the instructor's device. If a student is not physically in radio range (~10–15m), they cannot submit attendance.
-
-### 3. Scan-Time RSSI Multi-Sampling
-- Conventional BLE attendance systems connect to GATT and sequentially poll RSSI, holding connection channels open for 1,000–1,500ms.
-- AntiProxy passively collects $\ge 10$ broadcast advertisement packets over the air *before connecting*. Fixed-point Q1 mean and Q8.8 variance are computed locally, eliminating on-connection polling overhead.
-
-### 4. Ultra-Ephemeral GATT Sessions (< 300ms)
-- Android chipsets are hardware-limited to **4–7 concurrent peripheral GATT connections**.
-- AntiProxy requests `CONNECTION_PRIORITY_HIGH` (11.25–15ms intervals) immediately upon connection, exchanges binary-packed payloads, receives a 1-byte Status Indication ACK, and calls `disconnect()`.
-- Frees connection channels in **< 300ms**, preventing the classic `GATT_ERROR 133` "thundering herd" in classrooms with 100+ students.
-
-### 5. Hardware-Backed Cryptography
-- Generates non-exportable NIST P-256 (`secp256r1`) keys in the device's hardware **StrongBox** or **Trusted Execution Environment (TEE)**.
-- Enforces raw 64-byte IEEE P1363 ($r \parallel s$) format with strict **Low-S canonicalization** ($1 \le s \le n/2$) to prevent ECDSA signature malleability.
-
-### 6. Authority Foreground Service Protection
-- Runs the instructor's GATT server and BLE advertiser inside an Android **Foreground Service** (`foregroundServiceType="connectedDevice"`).
-- Holds a CPU `WakeLock` to prevent Android Doze Mode from throttling advertising or freezing GATT callbacks when the instructor locks their screen.
+The goal is to verify that students are physically present in the room when marking attendance, preventing remote proxy attendance (e.g. sharing nonces, links, or QR codes over messaging apps).
 
 ---
 
-## 📁 Repository Structure
+## How It Works
 
-```
-AntiProxy/
-├── core/                                    # Pure Kotlin Multiplatform (KMP) Module
-│   ├── src/commonMain/                      # Canonical wire formats, crypto, and verification logic
-│   │   ├── protocol/                        # SessionCodec (133B), ProofCodec (121B), FragmentCodec (6B)
-│   │   ├── crypto/                          # ECDSA P-256 Low-S, SHA-256 KeyId, Signer/Verifier contracts
-│   │   ├── attendance/                      # Strict 13-step ProofValidator, SessionValidator, RssiStats
-│   │   ├── scheduling/                      # SlotScheduler (200 slots x 100ms), RetryScheduler
-│   │   ├── storage/                         # Storage interfaces & event outbox models
-│   │   └── integration/                     # StudentApi & AuthorityApi contracts
-│   └── src/jvmTest/                         # 42 unit and property tests (runs on JVM in < 1s)
-│
-├── app/                                     # Android Application Module (Runnable in Android Studio)
-│   ├── src/main/AndroidManifest.xml         # BLE permissions, Foreground Service, Launcher Activity
-│   └── src/main/kotlin/org/ap/protocol/
-│       ├── ble/                             # StudentScanner (Pre-RSSI), StudentGattClient, AuthorityAdvertiser
-│       ├── keystore/                        # AndroidKeyManager (StrongBox/TEE), AndroidSigner, AndroidVerifier
-│       ├── storage/                         # SQLite WAL DatabaseFactory, Migrations, Student/Authority Stores
-│       ├── service/                         # AuthorityGattService (Foreground Service + WakeLock)
-│       ├── flow/                            # AuthorityFlow & StudentFlow orchestrators
-│       └── ui/                              # MainActivity (Dual-role Material 3 interface)
-│
-├── docs/                                    # In-Depth Technical Documentation
-│   ├── ARCHITECTURE.md                      # System layers, data flows, and state machines
-│   ├── PROTOCOL.md                          # Binary wire formats, GATT UUIDs, packet structures
-│   ├── SECURITY.md                          # Cryptographic suite, threat analysis, 13-step validation
-│   └── PERFORMANCE.md                       # RF optimization, ephemeral GATT, concurrency benchmarks
-│
-├── build.gradle.kts                         # Root Gradle buildscript
-├── settings.gradle.kts                      # Module includes (:core, :app)
-└── gradle.properties                        # AndroidX & JVM configuration
-```
+1. **Instructor starts a session**:
+   - The instructor's phone acts as a BLE advertiser and GATT server.
+   - It generates a temporary session with a random nonce and signs it with an asymmetric key pair.
+
+2. **Student discovers the session**:
+   - The student's phone scans for the instructor's BLE advertisement.
+   - While scanning, it collects a burst of RSSI (signal strength) readings to estimate signal consistency before connecting.
+
+3. **Verification over BLE GATT**:
+   - The student connects to the instructor's phone over BLE.
+   - The student reads the signed session, verifies the instructor's signature, and creates an attendance proof containing the session nonce, their device key ID, and the RSSI stats.
+   - The student signs this proof using their private key stored in the Android Keystore (backed by TEE or StrongBox if available).
+   - The proof is sent to the instructor over the GATT connection.
+
+4. **Instructor confirms & records**:
+   - The instructor verifies the student's signature against enrolled public keys, checks the nonce, validates the RSSI against a threshold, and checks for duplicate submissions.
+   - If valid, the record is saved to a local SQLite database on the instructor's phone, and a 1-byte success code is sent back.
+   - The BLE connection disconnects immediately to free the channel for other students.
 
 ---
 
-## 🛠️ Building & Running
+## Repository Structure
 
-### Prerequisites
-- **JDK 17+** (JDK 21 or 25 recommended)
-- **Android SDK** (API Level 35+, Build Tools 35.0.0+)
-- **Gradle 9.3+** (Wrapper included)
+The project is split into two modules:
 
-### 1. Build via Gradle
+- **`core/`**: A pure Kotlin Multiplatform module containing protocol codecs, wire formats, crypto interfaces, and attendance verification logic. It has no Android dependencies and runs unit tests on the JVM.
+- **`app/`**: The Android application containing the BLE scanner, GATT client/server, Android Keystore signing, SQLite database, background service, and UI.
+
+Detailed design docs, wire formats, and threat models are in the [`docs/`](docs/) directory:
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md): Architecture, module layout, and component interaction.
+- [`docs/PROTOCOL.md`](docs/PROTOCOL.md): GATT characteristics, wire formats, byte layouts, and status codes.
+- [`docs/SECURITY.md`](docs/SECURITY.md): Cryptographic choices, threat model, and verification checks.
+- [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md): Notes on classroom RF conditions and GATT connection handling.
+
+---
+
+## Building
+
+Requires JDK 17+ and the Android SDK.
+
 ```bash
-# Run pure KMP core test suite (42 unit tests)
+# Run unit tests in the core module
 ./gradlew :core:jvmTest
 
-# Assemble debug APK
+# Build debug APK
 ./gradlew :app:assembleDebug
 ```
-The output APK will be generated at:
-```text
-app/build/outputs/apk/debug/app-debug.apk
-```
 
-### 2. Install on Device
-```bash
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
+The APK will be generated at `app/build/outputs/apk/debug/app-debug.apk`.
 
 ---
 
-## 📱 Physical Device Quick-Start Guide
+## Testing on Physical Devices
 
-To test the application across two physical Android devices:
+To test with two Android phones:
 
-```
-               [Device A: Instructor]                      [Device B: Student]
-                         │                                           │
-  1. Open App ──────────>│ Select "Instructor"                       │
-                         │ Tap "Copy Authority Key"                  │
-                         │                                           │<────────── 2. Open App
-                         │                                           │            Select "Student"
-                         │                                           │            Tap "Pair Authority Key" (Paste Key A)
-                         │                                           │            Tap "Copy My Public Key"
-                         │<──────────────────────────────────────────│            Send Key B to Instructor
-  3. Enroll Student ────>│ Tap "Enroll Student Key" (Paste Key B)    │
-                         │                                           │
-  4. Start Session ─────>│ Tap "Start Session (5m)"                  │
-                         │ [Notification Active: 0 Verified]         │
-                         │                                           │<────────── 5. Check In
-                         │                                           │            Tap "Check In / Mark Attendance"
-                         │<═════════ Ultra-Fast BLE GATT (<300ms) ═══│            [HUD: Scanning -> Verified!]
-  6. Verified! ─────────>│ Counter increments to 1                   │
-                         │ Student appears in Live Feed              │
-```
-
-1. **Device A (Instructor / Authority)**:
-   - Launch AntiProxy $\rightarrow$ Select **Instructor / Authority**.
-   - Tap **Copy Authority Public Key**.
-   - Tap **Start Session (5m)** (an ongoing notification appears: *"AntiProxy Verification Active"*).
-2. **Device B (Student)**:
-   - Launch AntiProxy $\rightarrow$ Select **Student Node**.
-   - Tap **Pair Authority Public Key** $\rightarrow$ Paste Device A's public key $\rightarrow$ Save.
-   - Tap **Copy My Public Key** $\rightarrow$ On Device A, tap **Enroll Student Public Key** $\rightarrow$ Paste and save.
-3. **Execute Attendance**:
-   - On Device B (Student), tap **Check In / Mark Attendance**.
-   - The HUD transitions: `Scanning` $\rightarrow$ `Discovered Beacon` $\rightarrow$ `Connecting` $\rightarrow$ `Verified!`.
-   - On Device A (Instructor), the attendee counter increments instantly, and the student's truncated Key ID, timestamp, and RSSI statistics appear in the live feed.
-
----
-
-## 📚 Technical Documentation Index
-
-For exhaustive technical specifications, consult the documents in [`docs/`](file:///mnt/fedora_disk2/Projects2/AntiProxy/docs):
-
-* **[Architecture Guide (`docs/ARCHITECTURE.md`)](file:///mnt/fedora_disk2/Projects2/AntiProxy/docs/ARCHITECTURE.md)**: Layered architecture, subsystem interactions, background service lifecycles, and SQLite WAL design.
-* **[Protocol Specification (`docs/PROTOCOL.md`)](file:///mnt/fedora_disk2/Projects2/AntiProxy/docs/PROTOCOL.md)**: Exact byte-level layouts for `SessionSigned` (133B), `ProofEnvelope` (121B), `FragmentCodec` (6B), and GATT service/characteristic UUIDs.
-* **[Security Architecture (`docs/SECURITY.md`)](file:///mnt/fedora_disk2/Projects2/AntiProxy/docs/SECURITY.md)**: ECDSA P-256 Low-S formatting, KeyId computation, threat model, wall-clock rollback guard, and the strict 13-step verification pipeline.
-* **[Performance & RF Optimization (`docs/PERFORMANCE.md`)](file:///mnt/fedora_disk2/Projects2/AntiProxy/docs/PERFORMANCE.md)**: Mathematical analysis of scan-time RSSI sampling, ultra-ephemeral GATT channel recycling, and classroom thundering herd mitigation.
-
----
-
-## 📄 License
-This project is part of Project AntiProxy under the 3AM Organization. All rights reserved.
+1. Install the APK on both devices.
+2. Grant Bluetooth / Nearby Devices and Location permissions when prompted.
+3. **Phone 1 (Instructor)**:
+   - Select the **Instructor / Authority** tab.
+   - Tap **Copy Authority Public Key** (shares the public key as Base64).
+4. **Phone 2 (Student)**:
+   - Select the **Student Node** tab.
+   - Tap **Pair Authority Public Key** and paste the instructor's key.
+   - Tap **Copy My Public Key** and share it back to Phone 1.
+5. **Phone 1 (Instructor)**:
+   - Tap **Enroll Student Public Key** and paste the student's key.
+   - Tap **Start Session**.
+6. **Phone 2 (Student)**:
+   - Tap **Check In / Mark Attendance**.
+   - If in range, the app will scan, connect briefly, submit the signed proof, and confirm attendance. Phone 1 will update the attendee count and show the student in the list.
