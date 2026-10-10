@@ -1,0 +1,169 @@
+rules_version = '2';
+
+// AntiProxy Firestore security rules.
+//
+// Threat model: the API key ships in the app, so any signed-in user can script any
+// request these rules allow. Identities and names come from the auth token, never
+// from client data. Attendance records are written only by the teacher's phone,
+// which verifies the BLE proof cryptographically before uploading — so a student
+// can never mark themselves present through Firestore.
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+
+    // Classroom features require Google sign-in, so names are real and stable.
+    function google() {
+      return signedIn() && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function tokenName() { return request.auth.token.name; }
+
+    function classroom(cid) { return /databases/$(database)/documents/classrooms/$(cid); }
+    function member(cid, uid) { return /databases/$(database)/documents/classrooms/$(cid)/members/$(uid); }
+
+    function isTeacher(cid) { return google() && get(classroom(cid)).data.teacherUid == request.auth.uid; }
+    function isMember(cid) { return google() && exists(member(cid, request.auth.uid)); }
+
+    // 6 characters, no look-alikes (0/O, 1/I/L).
+    function validCode(c) { return c is string && c.matches('^[A-HJKMNP-Z2-9]{6}$'); }
+
+    // Base64 of an uncompressed P-256 public key (65 bytes → 88 chars).
+    function validKey(k) { return k is string && k.size() <= 100; }
+
+    function validName(n) { return n is string && n.size() >= 1 && n.size() <= 80; }
+
+    // Optional short text: section ("B.Tech"), room ("Lab 2").
+    function optText(d, k, max) { return !(k in d) || (d[k] is string && d[k].size() <= max); }
+
+    // Index into the app's built-in header artworks.
+    function validTheme(d) { return !('theme' in d) || (d.theme is int && d.theme >= 0 && d.theme < 16); }
+
+    // Avatars may only be the signed-in account's own Google photo (or none), so nobody can
+    // point theirs at an arbitrary URL.
+    function ownPhoto(d, k) { return !(k in d) || d[k] == '' || d[k] == request.auth.token.get('picture', ''); }
+
+    // Checks a photo only when this write changes it: an old token photo stays valid.
+    function photoChangeOk(k) {
+      return !request.resource.data.diff(resource.data).affectedKeys().hasAny([k]) || ownPhoto(request.resource.data, k);
+    }
+
+    function classroomDetailsOk(d) {
+      return optText(d, 'section', 80) && optText(d, 'room', 40) && validTheme(d);
+    }
+
+    // ── Profiles ──────────────────────────────────────────────────────────
+    match /users/{uid} {
+      allow read: if signedIn();
+      allow write: if signedIn() && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name'])
+        && validName(request.resource.data.name);
+
+      // A student's own list of classrooms. Only creatable alongside a real membership.
+      match /classrooms/{cid} {
+        allow read, delete: if signedIn() && request.auth.uid == uid;
+        allow create: if google() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['joinedAt'])
+          && existsAfter(member(cid, uid));
+        allow update: if false;
+      }
+    }
+
+    // ── Join codes ────────────────────────────────────────────────────────
+    // Fetched by id only (the code is the secret). Created in the same batch as
+    // the classroom it points to.
+    match /joinCodes/{code} {
+      allow get: if google();
+      allow list, update: if false;
+      allow create: if google() && validCode(code)
+        && request.resource.data.keys().hasOnly(['classroomId', 'teacherUid'])
+        && request.resource.data.teacherUid == request.auth.uid
+        && getAfter(classroom(request.resource.data.classroomId)).data.teacherUid == request.auth.uid
+        && getAfter(classroom(request.resource.data.classroomId)).data.joinCode == code;
+      allow delete: if google() && resource.data.teacherUid == request.auth.uid;
+    }
+
+    // ── Classrooms ────────────────────────────────────────────────────────
+    match /classrooms/{cid} {
+      // Anyone signed in may read one classroom (the invite dialog needs the
+      // name and teacher). Listing is limited to a teacher's own classrooms.
+      allow get: if google();
+      allow list: if google() && resource.data.teacherUid == request.auth.uid;
+
+      allow create: if google()
+        && request.resource.data.keys().hasOnly(['name', 'teacherUid', 'teacherName', 'authorityPublicKey', 'joinCode', 'createdAt',
+                                                 'section', 'room', 'theme', 'teacherPhotoUrl'])
+        && classroomDetailsOk(request.resource.data)
+        && ownPhoto(request.resource.data, 'teacherPhotoUrl')
+        && request.resource.data.teacherUid == request.auth.uid
+        && request.resource.data.teacherName == tokenName()
+        && validName(request.resource.data.name)
+        && validKey(request.resource.data.authorityPublicKey)
+        && validCode(request.resource.data.joinCode)
+        && getAfter(/databases/$(database)/documents/joinCodes/$(request.resource.data.joinCode)).data.classroomId == cid;
+
+      // Teacher may rename, reset the code, or replace the key (new phone).
+      // A deleted classroom stays read-only, so students can still see why they were removed.
+      allow update: if isTeacher(cid) && resource.data.get('deleted', false) != true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'joinCode', 'authorityPublicKey', 'teacherName',
+                                                                             'section', 'room', 'theme', 'teacherPhotoUrl'])
+        && classroomDetailsOk(request.resource.data)
+        && photoChangeOk('teacherPhotoUrl')
+        && request.resource.data.teacherName == tokenName()
+        && validName(request.resource.data.name)
+        && validKey(request.resource.data.authorityPublicKey)
+        && validCode(request.resource.data.joinCode);
+
+      // Deleting a classroom is a tombstone: the teacher marks it deleted, then removes
+      // the members and the join code. Students see the tombstone and get a notice.
+      allow update: if isTeacher(cid) && request.resource.data.deleted == true
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['deleted']);
+
+      allow delete: if isTeacher(cid);
+
+      // ── Members ─────────────────────────────────────────────────────────
+      // devicePublicKey is the approved key. A student on a new phone puts the
+      // new key in pendingDevicePublicKey; only the teacher can promote it.
+      match /members/{uid} {
+        // Classmates see each other on the People screen (names, photos, public keys only).
+        allow read: if isTeacher(cid) || isMember(cid) || (google() && request.auth.uid == uid);
+
+        allow create: if google() && request.auth.uid == uid
+          && request.resource.data.keys().hasOnly(['name', 'devicePublicKey', 'joinCode', 'joinedAt', 'photoUrl'])
+          && ownPhoto(request.resource.data, 'photoUrl')
+          && request.resource.data.name == tokenName()
+          && validKey(request.resource.data.devicePublicKey)
+          && request.resource.data.joinCode == get(classroom(cid)).data.joinCode
+          && get(classroom(cid)).data.get('deleted', false) != true;
+
+        allow update: if
+          (google() && request.auth.uid == uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['name', 'pendingDevicePublicKey', 'photoUrl'])
+            && photoChangeOk('photoUrl')
+            && request.resource.data.name == tokenName()
+            && validKey(request.resource.data.get('pendingDevicePublicKey', '')))
+          || (isTeacher(cid)
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['devicePublicKey', 'pendingDevicePublicKey'])
+            && validKey(request.resource.data.devicePublicKey));
+
+        // Teacher removes, or student leaves.
+        allow delete: if isTeacher(cid) || (google() && request.auth.uid == uid);
+      }
+
+      // ── Attendance sessions ─────────────────────────────────────────────
+      match /sessions/{sid} {
+        allow read: if isTeacher(cid) || isMember(cid);
+        allow create, update: if isTeacher(cid)
+          && request.resource.data.keys().hasOnly(['status', 'startedAt', 'endsAt'])
+          && request.resource.data.status in ['ACTIVE', 'ENDED'];
+        allow delete: if isTeacher(cid);
+
+        // Uploaded by the teacher's phone after it verified the BLE proof.
+        match /records/{uid} {
+          allow read: if isTeacher(cid) || (google() && request.auth.uid == uid);
+          allow write: if isTeacher(cid);
+        }
+      }
+    }
+  }
+}

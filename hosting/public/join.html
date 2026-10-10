@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Join a class · AntiProxy</title>
+  <style>
+    body { font-family: system-ui, sans-serif; margin: 0; min-height: 100vh; display: grid; place-items: center; background: #f6f1ff; color: #1d1b20; }
+    main { max-width: 28rem; padding: 2rem 1.5rem; }
+    h1 { font-size: 1.6rem; margin: 0 0 1rem; }
+    .code { font-size: 2.25rem; font-weight: 700; letter-spacing: .15em; margin: 1rem 0; font-variant-numeric: tabular-nums; }
+    p { font-size: 1.05rem; line-height: 1.5; }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Join your class on AntiProxy</h1>
+    <p>Class code</p>
+    <p class="code" id="code" aria-label="Class code">—</p>
+    <p>Open this link on an Android phone with AntiProxy installed. If the app doesn't open, open AntiProxy, choose <strong>Join a classroom</strong>, and type the code above.</p>
+  </main>
+  <script>
+    // The code is the last path segment, e.g. /join/A5AXM2. Shown with textContent, never as HTML.
+    var raw = decodeURIComponent(location.pathname.split("/").pop() || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    if (/^[A-HJKMNP-Z2-9]{6}$/.test(raw)) {
+      document.getElementById("code").textContent = raw.slice(0, 3) + "-" + raw.slice(3);
+    } else {
+      document.getElementById("code").textContent = "This link is incomplete. Ask your teacher to share it again.";
+    }
+  </script>
+</body>
+</html>

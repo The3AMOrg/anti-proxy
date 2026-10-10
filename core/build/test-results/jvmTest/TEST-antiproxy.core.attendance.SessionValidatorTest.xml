@@ -1,9 +1,0 @@
-<?xml version="1.0" encoding="UTF-8"?>
-<testsuite name="SessionValidatorTest[jvm]" tests="3" skipped="0" failures="0" errors="0" timestamp="2026-10-07T16:24:46.935Z" hostname="sandbox" time="0.011">
-  <properties/>
-  <testcase name="testValidSession[jvm]" classname="antiproxy.core.attendance.SessionValidatorTest" time="0.004"/>
-  <testcase name="testUnknownAuthority[jvm]" classname="antiproxy.core.attendance.SessionValidatorTest" time="0.003"/>
-  <testcase name="testExpiredSession[jvm]" classname="antiproxy.core.attendance.SessionValidatorTest" time="0.004"/>
-  <system-out><![CDATA[]]></system-out>
-  <system-err><![CDATA[]]></system-err>
-</testsuite>

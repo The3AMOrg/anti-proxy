@@ -13,3 +13,12 @@
 .externalNativeBuild
 local.properties
 .android/
+
+# Firestore rules tests
+firestore-tests/node_modules/
+*-debug.log
+app/google-services.json
+
+# Generated build output in every module, and the Firebase CLI cache
+**/build/
+.firebase/

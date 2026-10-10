@@ -29,7 +29,8 @@ class StudentGattClient(private val context: Context) {
     private var writeDeferred: CompletableDeferred<Boolean>? = null
     private var descriptorDeferred: CompletableDeferred<Boolean>? = null
     private var rssiDeferred: CompletableDeferred<Int>? = null
-    private var statusDeferred: CompletableDeferred<StatusCode>? = null
+    // Set from coroutines, completed from the GATT binder thread
+    @Volatile private var statusDeferred: CompletableDeferred<StatusCode>? = null
 
     private val gattCallback = object : BluetoothGattCallback() {
         override fun onConnectionStateChange(gatt: BluetoothGatt, status: Int, newState: Int) {
@@ -207,6 +208,10 @@ class StudentGattClient(private val context: Context) {
         val proofChar = service.getCharacteristic(PROOF_CHAR_UUID) ?: error("Proof characteristic not found")
         proofChar.writeType = BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
 
+        // Arm before sending: the authority can answer before the last write callback
+        // returns, and an indication with nothing waiting for it is lost.
+        statusDeferred = CompletableDeferred()
+
         val maxChunk = MtuNegotiator.maxChunkSize(negotiatedMtu)
         val fragments = fragmentPayload(transferId, envelopeBytes, maxChunk)
 
@@ -227,8 +232,7 @@ class StudentGattClient(private val context: Context) {
     }
 
     suspend fun awaitStatusIndication(timeoutMs: Long = 8_000L): StatusCode {
-        val deferred = CompletableDeferred<StatusCode>()
-        statusDeferred = deferred
+        val deferred = statusDeferred ?: CompletableDeferred<StatusCode>().also { statusDeferred = it }
         return try {
             withTimeout(timeoutMs) { deferred.await() }
         } finally {

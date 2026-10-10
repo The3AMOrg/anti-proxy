@@ -1,0 +1,116 @@
+name: Build and Release APK
+
+# Push a tag like v1.1.0 (or run by hand) to build a signed APK and publish a GitHub release.
+# The release notes become the in-app changelog and "What's new" in the update sheet,
+# so write them in changelog/<tag>.md before tagging. See docs/RELEASING.md.
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version tag (e.g. v1.1.0). Must match versionName in app/build.gradle.kts."
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Build, sign and publish
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set version tag
+        id: version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            echo "tag=${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${{ github.ref_name }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Check the tag matches versionName
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          NAME=$(grep -oP 'versionName = "\K[^"]+' app/build.gradle.kts)
+          if [ "v$NAME" != "${TAG%%-*}" ] && [ "v$NAME" != "$TAG" ]; then
+            echo "Tag $TAG doesn't match versionName $NAME. Bump versionName and versionCode first."
+            exit 1
+          fi
+
+      - name: Set up JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Decode keystore and Google services config
+        env:
+          KEYSTORE_BASE64: ${{ secrets.KEYSTORE_BASE64 }}
+          GOOGLE_SERVICES_JSON: ${{ secrets.GOOGLE_SERVICES_JSON }}
+        run: |
+          echo "$KEYSTORE_BASE64" | base64 --decode > keystore.jks
+          printf '%s' "$GOOGLE_SERVICES_JSON" | base64 --decode > app/google-services.json
+          echo "KEYSTORE_PATH=$PWD/keystore.jks" >> "$GITHUB_ENV"
+
+      - name: Build signed release APK
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+        run: |
+          chmod +x gradlew
+          ./gradlew :app:assembleRelease --stacktrace
+
+      - name: Name the APKs
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          mkdir -p release-apks
+          # One per CPU type plus universal; the in-app updater matches these names to the phone
+          for apk in $(find app/build/outputs/apk/release -name '*.apk'); do
+            f=$(basename "$apk")
+            case "$f" in
+              *arm64-v8a*)   arch=arm64-v8a ;;
+              *armeabi-v7a*) arch=armeabi-v7a ;;
+              *x86_64*)      arch=x86_64 ;;
+              *)             arch=universal ;;
+            esac
+            cp "$apk" "release-apks/AntiProxy-${TAG}-${arch}.apk"
+          done
+          ls -la release-apks
+          [ "$(ls release-apks | wc -l)" -ge 1 ] || { echo "No APKs built"; exit 1; }
+
+      - name: Release notes
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          if [ -f "changelog/${TAG}.md" ]; then
+            cp "changelog/${TAG}.md" notes.md
+          else
+            echo "No changelog/${TAG}.md, using a placeholder."
+            echo "Release ${TAG}" > notes.md
+          fi
+          cat notes.md
+
+      - name: Publish release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ steps.version.outputs.tag }}"
+          # A hyphen (v1.1.0-beta1) means a pre-release: only users who opt in get it
+          PRE=""
+          if [[ "$TAG" == *-* ]]; then PRE="--prerelease"; fi
+          # If the release already exists (notes written by hand on GitHub), keep its notes and only attach the APK
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" release-apks/*.apk --clobber
+          else
+            gh release create "$TAG" release-apks/*.apk --title "AntiProxy $TAG" --notes-file notes.md $PRE
+          fi

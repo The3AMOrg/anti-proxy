@@ -1,0 +1,15 @@
+[
+  {
+    "relation": [
+      "delegate_permission/common.handle_all_urls"
+    ],
+    "target": {
+      "namespace": "android_app",
+      "package_name": "org.ap.protocol",
+      "sha256_cert_fingerprints": [
+        "8F:8C:12:C2:09:FB:D7:AB:7B:40:87:BF:37:F0:39:98:AD:07:C5:76:B3:05:EE:41:4D:36:D5:BD:DC:D6:03:B9",
+        "8F:A9:AE:15:C4:8E:C8:42:62:DA:C5:E3:B3:97:5A:61:2C:BC:23:9C:1D:67:F2:AD:1B:81:F7:E3:54:0B:0C:37"
+      ]
+    }
+  }
+]

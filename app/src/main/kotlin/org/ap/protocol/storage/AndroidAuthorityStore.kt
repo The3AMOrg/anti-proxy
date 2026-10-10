@@ -67,7 +67,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
     override fun getSession(sessionId: ByteArray): Session? {
         val db = dbHelper.readableDatabase
         db.rawQuery(
-            "SELECT authority_key_id, nonce, issued_at, expires_at, policy_id FROM authority_sessions WHERE session_id = ?",
+            "SELECT authority_key_id, nonce, issued_at, expires_at, policy_id FROM authority_sessions WHERE hex(session_id) = ?",
             arrayOf(sessionId.toHex())
         ).use { cursor ->
             if (cursor.moveToFirst()) {
@@ -86,7 +86,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
 
     override fun deleteSession(sessionId: ByteArray) {
         val db = dbHelper.writableDatabase
-        db.delete("authority_sessions", "session_id = ?", arrayOf(sessionId.toHex()))
+        db.delete("authority_sessions", "hex(session_id) = ?", arrayOf(sessionId.toHex()))
     }
 
     override fun cacheStudentKey(keyId: KeyId, publicKey: PublicKeyBytes) {
@@ -102,7 +102,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
     override fun getStudentKey(keyId: ByteArray): PublicKeyBytes? {
         val db = dbHelper.readableDatabase
         db.rawQuery(
-            "SELECT public_key FROM student_key_cache WHERE key_id = ?",
+            "SELECT public_key FROM student_key_cache WHERE hex(key_id) = ?",
             arrayOf(keyId.toHex())
         ).use { cursor ->
             if (cursor.moveToFirst()) {
@@ -126,7 +126,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
     override fun isDeviceRevoked(keyId: ByteArray): Boolean {
         val db = dbHelper.readableDatabase
         db.rawQuery(
-            "SELECT is_revoked FROM student_key_cache WHERE key_id = ?",
+            "SELECT is_revoked FROM student_key_cache WHERE hex(key_id) = ?",
             arrayOf(keyId.toHex())
         ).use { cursor ->
             if (cursor.moveToFirst()) {
@@ -141,7 +141,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
         val values = ContentValues().apply {
             put("is_revoked", 1)
         }
-        db.update("student_key_cache", values, "key_id = ?", arrayOf(keyId.toHex()))
+        db.update("student_key_cache", values, "hex(key_id) = ?", arrayOf(keyId.toHex()))
     }
 
     override fun commitAttendance(record: AttendanceRecord, syncEvent: SyncEvent): Boolean {
@@ -189,7 +189,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
     override fun hasAttendance(sessionId: ByteArray, deviceKeyId: ByteArray): Boolean {
         val db = dbHelper.readableDatabase
         db.rawQuery(
-            "SELECT 1 FROM attendance_records WHERE session_id = ? AND device_key_id = ?",
+            "SELECT 1 FROM attendance_records WHERE hex(session_id) = ? AND hex(device_key_id) = ?",
             arrayOf(sessionId.toHex(), deviceKeyId.toHex())
         ).use { cursor ->
             return cursor.moveToFirst()
@@ -199,7 +199,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
     override fun getAttendanceCount(sessionId: ByteArray): Int {
         val db = dbHelper.readableDatabase
         db.rawQuery(
-            "SELECT COUNT(*) FROM attendance_records WHERE session_id = ?",
+            "SELECT COUNT(*) FROM attendance_records WHERE hex(session_id) = ?",
             arrayOf(sessionId.toHex())
         ).use { cursor ->
             if (cursor.moveToFirst()) {
@@ -217,7 +217,7 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
             SELECT session_id, device_key_id, authority_key_id, policy_id, policy_version,
                    rssi_mean, rssi_variance, sample_count, recorded_at, idempotency_key
             FROM attendance_records
-            WHERE session_id = ?
+            WHERE hex(session_id) = ?
             ORDER BY recorded_at DESC
             """.trimIndent(),
             arrayOf(sessionId.toHex())
@@ -302,5 +302,6 @@ class AndroidAuthorityStore(context: Context) : AuthorityStore {
         db.insertWithOnConflict("clock_guard", null, values, SQLiteDatabase.CONFLICT_REPLACE)
     }
 
-    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
+    // Matches SQLite hex(), which returns uppercase, for comparing against BLOB columns
+    private fun ByteArray.toHex(): String = joinToString("") { "%02X".format(it) }
 }

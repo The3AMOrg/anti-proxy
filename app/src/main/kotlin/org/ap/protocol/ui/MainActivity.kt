@@ -1,834 +1,518 @@
+@file:OptIn(ExperimentalMaterial3ExpressiveApi::class, ExperimentalMaterial3Api::class)
+
 package org.ap.protocol.ui
 
 import android.Manifest
-import android.util.Log
-import androidx.appcompat.app.AppCompatActivity
-import androidx.appcompat.app.AlertDialog
-import android.content.*
+import android.bluetooth.BluetoothManager
+import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.Color
-import android.graphics.Typeface
-import android.graphics.drawable.GradientDrawable
 import android.os.Build
 import android.os.Bundle
-import android.os.IBinder
-import android.view.Gravity
-import android.view.View
-import android.view.ViewGroup
-import android.widget.*
-import androidx.core.app.ActivityCompat
+import androidx.activity.ComponentActivity
+import androidx.activity.compose.LocalActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.activity.compose.PredictiveBackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.SeekableTransitionState
+import androidx.compose.animation.core.rememberTransition
+import androidx.compose.animation.EnterTransition
+import androidx.compose.animation.ExitTransition
+import androidx.compose.animation.togetherWith
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import androidx.lifecycle.viewmodel.compose.viewModel
+import kotlin.coroutines.cancellation.CancellationException
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.launch
+import org.ap.protocol.account.AccountState
+import org.ap.protocol.account.AccountViewModel
+import org.ap.protocol.account.AppRole
+import org.ap.protocol.account.ThemeMode
+import org.ap.protocol.classroom.Classroom
+import org.ap.protocol.classroom.ClassroomViewModel
+import org.ap.protocol.classroom.JoinCode
+import org.ap.protocol.classroom.MembershipStatus
 import org.ap.protocol.flow.StudentCheckInState
-import org.ap.protocol.flow.StudentFlow
-import org.ap.protocol.keystore.AndroidKeyManager
-import org.ap.protocol.service.AuthorityGattService
-import org.ap.protocol.storage.AndroidAuthorityStore
-import org.ap.protocol.storage.AndroidStudentStore
-import antiproxy.core.crypto.KeyId
-import antiproxy.core.crypto.PublicKeyBytes
-import antiproxy.core.integration.AttendanceResult
-import antiproxy.core.storage.AttendanceRecord
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.collectLatest
-import java.text.SimpleDateFormat
-import java.util.*
+import org.ap.protocol.ui.theme.AntiProxyTheme
+import org.ap.protocol.update.UpdateViewModel
+import org.ap.protocol.update.bestApk
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : ComponentActivity() {
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
-
-    private lateinit var keyManager: AndroidKeyManager
-    private lateinit var authorityStore: AndroidAuthorityStore
-    private lateinit var studentStore: AndroidStudentStore
-
-    private var authorityService: AuthorityGattService? = null
-    private var isServiceBound = false
-
-    private val authorityKeyAlias = "antiproxy_authority_key"
-    private val studentKeyAlias = "antiproxy_device_signing_key"
-
-    // UI Elements
-    private lateinit var roleToggleGroup: LinearLayout
-    private lateinit var authorityBtn: Button
-    private lateinit var studentBtn: Button
-    private lateinit var authorityContainer: LinearLayout
-    private lateinit var studentContainer: LinearLayout
-
-    // Authority UI
-    private lateinit var authSessionStatusText: TextView
-    private lateinit var authCountText: TextView
-    private lateinit var authStartBtn: Button
-    private lateinit var authStopBtn: Button
-    private lateinit var authKeyDetailsText: TextView
-    private lateinit var authRosterContainer: LinearLayout
-
-    // Student UI
-    private lateinit var studentKeyStatusText: TextView
-    private lateinit var studentCheckInBtn: Button
-    private lateinit var studentProgressText: TextView
-    private lateinit var studentProgressBar: ProgressBar
-    private lateinit var studentHistoryContainer: LinearLayout
-    private lateinit var studentAuthorityStatusText: TextView
-
-    private var currentRole = Role.AUTHORITY
-
-    private enum class Role { AUTHORITY, STUDENT }
-
-    private val serviceConnection = object : ServiceConnection {
-        override fun onServiceConnected(name: ComponentName?, binder: IBinder?) {
-            val localBinder = binder as? AuthorityGattService.LocalBinder
-            authorityService = localBinder?.getService()
-            isServiceBound = true
-            observeAuthorityService()
-        }
-
-        override fun onServiceDisconnected(name: ComponentName?) {
-            authorityService = null
-            isServiceBound = false
-        }
-    }
+    /** A join code from a tapped link; waits until the user is signed in and on the student side. */
+    private var pendingJoinCode by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        Log.i("AntiProxy", "MainActivity.onCreate started")
+        // Only on a fresh launch: after rotation the same intent would open the invite again
+        if (savedInstanceState == null) pendingJoinCode = joinCodeFrom(intent)
+        setContent {
+            val account: AccountViewModel = viewModel()
+            val state by account.state.collectAsStateWithLifecycle()
+            val dark = when (state.themeMode) {
+                ThemeMode.System -> null
+                ThemeMode.Light -> false
+                ThemeMode.Dark -> true
+            }
+            AntiProxyTheme(darkOverride = dark) {
+                Root(account, state, joinCode = pendingJoinCode, onJoinHandled = { pendingJoinCode = null })
+            }
+        }
+    }
 
+    // singleTop: the app is already open when a link is tapped
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        joinCodeFrom(intent)?.let { pendingJoinCode = it }
+    }
+
+    private fun joinCodeFrom(intent: Intent?): String? =
+        if (intent?.action != Intent.ACTION_VIEW) null
+        else JoinCode.fromLinkPath(intent.data?.takeIf { it.host == JoinCode.LINK_HOST }?.path)
+}
+
+/** Sign in → choose a role → main app. */
+@Composable
+private fun Root(account: AccountViewModel, state: AccountState, joinCode: String?, onJoinHandled: () -> Unit) {
+    val activity = LocalActivity.current
+    val signedIn = state.user != null
+    // The check plays only on the moment of signing in, not on every app open
+    var wasSignedIn by remember { mutableStateOf(signedIn) }
+    var celebrating by rememberSaveable { mutableStateOf(false) }
+    LaunchedEffect(signedIn) {
+        if (signedIn && !wasSignedIn) celebrating = true
+        wasSignedIn = signedIn
+    }
+    val celebrate = signedIn && (celebrating || !wasSignedIn)
+    val stage = when {
+        !signedIn || celebrate -> Stage.SignIn
+        state.role == null -> Stage.Role
+        else -> Stage.Main
+    }
+    AnimatedContent(targetState = stage, label = "stage") { target ->
+        when (target) {
+            Stage.SignIn -> SignInScreen(
+                signingIn = state.signingIn,
+                error = state.error,
+                signedIn = signedIn,
+                onSignIn = { activity?.let(account::signIn) },
+                onCelebrated = { celebrating = false }
+            )
+            Stage.Role -> RoleScreen(name = state.displayName, onChoose = account::setRole)
+            Stage.Main -> AntiProxyApp(account, state, joinCode, onJoinHandled)
+        }
+    }
+}
+
+private enum class Stage { SignIn, Role, Main }
+
+/** Where the user is; depth decides which way the transition slides. */
+private sealed interface Screen {
+    val depth: Int
+    data object Home : Screen { override val depth = 0 }
+    data class Class(val id: String) : Screen { override val depth = 1 }
+    data object Settings : Screen { override val depth = 1 }
+    data object About : Screen { override val depth = 2 }
+
+    /** Where Back goes. About is only reachable from Settings. */
+    fun parent(): Screen = when (this) {
+        About -> Settings
+        else -> Home
+    }
+}
+
+/** Bluetooth permissions for an attendance action. Notifications are optional (the session's status notice). */
+private fun blePermissions(teacher: Boolean): List<String> = buildList {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        add(Manifest.permission.BLUETOOTH_SCAN)
+        add(Manifest.permission.BLUETOOTH_CONNECT)
+        if (teacher) add(Manifest.permission.BLUETOOTH_ADVERTISE)
+    } else {
+        add(Manifest.permission.ACCESS_FINE_LOCATION)
+    }
+    if (teacher && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
+}
+
+private fun Context.granted(permission: String) =
+    ContextCompat.checkSelfPermission(this, permission) == PackageManager.PERMISSION_GRANTED
+
+private fun Context.bluetoothOn() = getSystemService(BluetoothManager::class.java)?.adapter?.isEnabled == true
+
+/** Home, a class, or Settings, plus the dialogs that can appear over any of them. */
+@Composable
+private fun AntiProxyApp(
+    account: AccountViewModel,
+    state: AccountState,
+    joinCode: String?,
+    onJoinHandled: () -> Unit,
+    vm: MainViewModel = viewModel(),
+    classVm: ClassroomViewModel = viewModel(),
+    updateVm: UpdateViewModel = viewModel()
+) {
+    val role = state.role ?: AppRole.Instructor
+    val updateSettings by updateVm.settings.collectAsStateWithLifecycle()
+    val newRelease by updateVm.available.collectAsStateWithLifecycle()
+    val showUpdateSheet by updateVm.showUpdateSheet.collectAsStateWithLifecycle()
+    val checkingForUpdates by updateVm.checking.collectAsStateWithLifecycle()
+    val download by updateVm.download.collectAsStateWithLifecycle()
+    val changelog by updateVm.changelog.collectAsStateWithLifecycle()
+    val showChangelog by updateVm.showChangelog.collectAsStateWithLifecycle()
+    val session by vm.session.collectAsStateWithLifecycle()
+    val checkIn by vm.checkIn.collectAsStateWithLifecycle()
+    val history by vm.history.collectAsStateWithLifecycle()
+    val teaching by classVm.teaching.collectAsStateWithLifecycle()
+    val joined by classVm.joined.collectAsStateWithLifecycle()
+    val invite by classVm.invite.collectAsStateWithLifecycle()
+    val prompts by classVm.prompts.collectAsStateWithLifecycle()
+
+    val snackbar = remember { SnackbarHostState() }
+    val scope = rememberCoroutineScope()
+    val showMessage: (String) -> Unit = { scope.launch { snackbar.showSnackbar(it) } }
+    val context = LocalContext.current
+    val haptics = LocalHapticFeedback.current
+    LaunchedEffect(classVm) { classVm.messages.collect { snackbar.showSnackbar(it) } }
+    LaunchedEffect(updateVm) { updateVm.messages.collect { snackbar.showSnackbar(it) } }
+    LaunchedEffect(joinCode, role) {
+        if (joinCode == null) return@LaunchedEffect
+        if (role == AppRole.Student) classVm.lookUp(joinCode)
+        else showMessage("Switch to Student in Settings, then open the invite link again.")
+        onJoinHandled()
+    }
+    // Felt as well as seen: a confirm or reject buzz when a check-in finishes
+    LaunchedEffect(checkIn) {
+        when (checkIn) {
+            is StudentCheckInState.Success -> haptics.performHapticFeedback(HapticFeedbackType.Confirm)
+            is StudentCheckInState.Rejected, is StudentCheckInState.Error -> haptics.performHapticFeedback(HapticFeedbackType.Reject)
+            else -> Unit
+        }
+    }
+
+    var openClassId by rememberSaveable { mutableStateOf<String?>(null) }
+    var showSettings by rememberSaveable { mutableStateOf(false) }
+    var showAbout by rememberSaveable { mutableStateOf(false) }
+    var attendingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var creating by rememberSaveable { mutableStateOf(false) }
+    var editingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deletingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var unenrollingId by rememberSaveable { mutableStateOf<String?>(null) }
+
+    // Permissions are asked when an attendance action needs them, not at launch
+    var afterPermission by remember { mutableStateOf<(() -> Unit)?>(null) }
+    var askedTeacher by remember { mutableStateOf(false) }
+    val permissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        val action = afterPermission
+        afterPermission = null
+        val required = blePermissions(askedTeacher).filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        if (required.all(context::granted)) action?.invoke()
+        else showMessage("Allow Nearby devices so AntiProxy can use Bluetooth. You can do it in Settings.")
+    }
+    fun withBluetooth(teacher: Boolean, action: () -> Unit) {
+        val wanted = blePermissions(teacher)
+        val required = wanted.filter { it != Manifest.permission.POST_NOTIFICATIONS }
+        when {
+            !required.all(context::granted) -> {
+                afterPermission = action
+                askedTeacher = teacher
+                permissionLauncher.launch(wanted.filterNot(context::granted).toTypedArray())
+            }
+            !context.bluetoothOn() ->
+                showMessage(if (teacher) "Turn on Bluetooth to take attendance." else "Turn on Bluetooth to mark attendance.")
+            else -> action()
+        }
+    }
+
+    val running = session.isRunning
+    val endAttendance: (Classroom) -> Unit = { c ->
+        attendingId = null
+        classVm.endAttendance(c)
+        vm.stopSession()
+    }
+    // Without Bluetooth the broadcast never starts, so no session is opened that students would be prompted for
+    val takeAttendance: (Classroom) -> Unit = { c ->
+        withBluetooth(teacher = true) {
+            attendingId = c.id
+            classVm.startAttendance(c)
+            vm.startSession()
+        }
+    }
+    val markAttendance: () -> Unit = { withBluetooth(teacher = false) { vm.checkIn() } }
+
+    // Each verified check-in goes to Firestore under the open session; offline it waits in Firestore's queue
+    val lastRecord = session.recentRecords.firstOrNull()
+    LaunchedEffect(lastRecord) {
+        val record = lastRecord ?: return@LaunchedEffect
+        attendingId?.let { classVm.recordAttendance(it, record) }
+    }
+
+    val liveClassIds: Set<String> =
+        if (role == AppRole.Instructor) setOfNotNull(attendingId.takeIf { running })
+        else prompts.map { it.classroom.id }.toSet()
+
+    val screen: Screen = when {
+        showAbout -> Screen.About
+        showSettings -> Screen.Settings
+        openClassId != null && (
+            if (role == AppRole.Instructor) teaching.any { it.classroom.id == openClassId }
+            else joined.any { it.classroom.id == openClassId }
+        ) -> Screen.Class(openClassId!!)
+        else -> Screen.Home
+    }
+    val still = reduceMotion()
+
+    // Seekable, so the back gesture can scrub the transition with the finger (predictive back)
+    val screenState = remember { SeekableTransitionState<Screen>(screen) }
+    LaunchedEffect(screen) { if (screenState.currentState != screen || screenState.targetState != screen) screenState.animateTo(screen) }
+    val goBack: () -> Unit = {
+        when {
+            showAbout -> showAbout = false
+            showSettings -> showSettings = false
+            else -> openClassId = null
+        }
+    }
+    // While the finger moves, the current screen slides right and shrinks and the previous one shows
+    // underneath. Lifting commits; swiping back out cancels and springs it back.
+    PredictiveBackHandler(enabled = screen != Screen.Home) { gesture ->
+        val previous = screen.parent()
         try {
-            keyManager = AndroidKeyManager(this)
-            authorityStore = AndroidAuthorityStore(this)
-            studentStore = AndroidStudentStore(this)
-
-            setContentView(buildMainLayout())
-
-            checkAndRequestPermissions()
-
-            try {
-                val intent = Intent(this, AuthorityGattService::class.java)
-                bindService(intent, serviceConnection, Context.BIND_AUTO_CREATE)
-            } catch (e: Exception) {
-                Log.e("AntiProxy", "Error binding AuthorityGattService", e)
-            }
-
-            try {
-                refreshAuthorityKeys()
-            } catch (e: Exception) {
-                Log.e("AntiProxy", "Error refreshing authority keys", e)
-            }
-
-            try {
-                refreshStudentKeys()
-            } catch (e: Exception) {
-                Log.e("AntiProxy", "Error refreshing student keys", e)
-            }
-
-            try {
-                refreshStudentHistory()
-            } catch (e: Exception) {
-                Log.e("AntiProxy", "Error refreshing student history", e)
-            }
-        } catch (t: Throwable) {
-            Log.e("AntiProxy", "Fatal initialization error in MainActivity.onCreate", t)
-            Toast.makeText(this, "Startup error: ${t.message}", Toast.LENGTH_LONG).show()
+            gesture.collect { event -> if (!still) screenState.seekTo(event.progress, previous) }
+            goBack()
+        } catch (e: CancellationException) {
+            // This coroutine is already cancelled, so spring back from the screen's own scope
+            scope.launch { screenState.animateTo(screen) }
+            throw e
         }
     }
 
-    override fun onDestroy() {
-        if (isServiceBound) {
-            unbindService(serviceConnection)
-            isServiceBound = false
-        }
-        scope.cancel()
-        super.onDestroy()
-    }
-
-    private fun checkAndRequestPermissions() {
-        val permissions = mutableListOf<String>()
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-            permissions.add(Manifest.permission.BLUETOOTH_SCAN)
-            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE)
-            permissions.add(Manifest.permission.BLUETOOTH_CONNECT)
-        } else {
-            permissions.add(Manifest.permission.BLUETOOTH)
-            permissions.add(Manifest.permission.BLUETOOTH_ADMIN)
-        }
-
-        permissions.add(Manifest.permission.ACCESS_FINE_LOCATION)
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            permissions.add(Manifest.permission.POST_NOTIFICATIONS)
-        }
-
-        val needed = permissions.filter {
-            ContextCompat.checkSelfPermission(this, it) != PackageManager.PERMISSION_GRANTED
-        }
-
-        if (needed.isNotEmpty()) {
-            ActivityCompat.requestPermissions(this, needed.toTypedArray(), 101)
-        }
-    }
-
-    private fun observeAuthorityService() {
-        val service = authorityService ?: return
-        scope.launch {
-            service.state.collectLatest { state ->
-                authSessionStatusText.text = if (state.isRunning) {
-                    "● ACTIVE SESSION (Broadcasting BLE)"
-                } else {
-                    "○ SESSION IDLE"
-                }
-                authSessionStatusText.setTextColor(if (state.isRunning) Color.parseColor("#4CAF50") else Color.parseColor("#9E9E9E"))
-
-                authCountText.text = "${state.attendanceCount}"
-                authStartBtn.isEnabled = !state.isRunning
-                authStopBtn.isEnabled = state.isRunning
-
-                updateRosterList(state.recentRecords)
+    // Expressive navigation (AttendX's springs): deeper screens slide in from the right, back reverses it
+    rememberTransition(screenState, label = "screen").AnimatedContent(
+        transitionSpec = {
+            when {
+                still -> EnterTransition.None togetherWith ExitTransition.None
+                targetState.depth >= initialState.depth -> slideFadeInFromRight() togetherWith slideFadeOutToLeft()
+                else -> slideFadeInFromLeft() togetherWith slideFadeOutToRight()
             }
         }
-    }
+    ) { s ->
+        when (s) {
+            Screen.About -> AboutScreen(
+                onBack = { showAbout = false },
+                onChangelog = updateVm::openChangelog,
+                onCheckForUpdates = { updateVm.check(manual = true) }
+            )
 
-    private fun updateRosterList(records: List<AttendanceRecord>) {
-        authRosterContainer.removeAllViews()
-        if (records.isEmpty()) {
-            val empty = TextView(this).apply {
-                text = "No students verified yet this session."
-                textSize = 13f
-                setTextColor(Color.parseColor("#757575"))
-                setPadding(0, 12, 0, 12)
-            }
-            authRosterContainer.addView(empty)
-            return
-        }
+            Screen.Settings -> SettingsScreen(
+                name = state.displayName.orEmpty(),
+                email = state.user?.email.orEmpty(),
+                photoUrl = state.user?.photoUrl?.toString().orEmpty(),
+                role = role,
+                themeMode = state.themeMode,
+                snackbar = snackbar,
+                onBack = { showSettings = false },
+                onRename = { account.updateName(it, showMessage) },
+                onSignOut = account::signOut,
+                onRole = {
+                    account.setRole(it)
+                    openClassId = null
+                },
+                onTheme = account::setThemeMode,
+                updates = updateSettings,
+                checkingForUpdates = checkingForUpdates,
+                onCheckForUpdates = { updateVm.check(manual = true) },
+                onUpdateSettings = updateVm::update,
+                onAbout = { showAbout = true },
+                onChangelog = updateVm::openChangelog
+            )
 
-        val sdf = SimpleDateFormat("HH:mm:ss", Locale.getDefault())
-        records.forEach { record ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(16, 12, 16, 12)
-                background = cardBackground(Color.parseColor("#F5F5F5"))
-                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                lp.bottomMargin = 8
-                layoutParams = lp
-            }
+            is Screen.Class -> {
+                // Looked up from the lists, not openClassId, so a class sliding out after Back still renders
+                val openTeaching = teaching.firstOrNull { it.classroom.id == s.id }.takeIf { role == AppRole.Instructor }
+                val openJoined = joined.firstOrNull { it.classroom.id == s.id }.takeIf { role == AppRole.Student }
+                when {
+                    openTeaching != null -> {
+                        val c = openTeaching.classroom
+                        val attending = attendingId == c.id && running
+                        ClassScreen(
+                            classroom = c,
+                            members = openTeaching.members,
+                            myUid = state.user?.uid,
+                            snackbar = snackbar,
+                            onBack = { openClassId = null },
+                            teacher = TeacherControls(
+                                attending = attending,
+                                presentCount = session.attendanceCount,
+                                presentNames = if (attending) classVm.presentNames(c.id, session.recentRecords) else emptyList(),
+                                activeSession = session.activeSession.takeIf { attending },
+                                onTakeAttendance = { takeAttendance(c) },
+                                onEndAttendance = { endAttendance(c) },
+                                onResetCode = { classVm.resetCode(c) },
+                                onApprove = { classVm.approveDevice(c, it) },
+                                onRemove = { classVm.removeMember(c, it) },
+                                onEdit = { editingId = c.id },
+                                onDelete = { deletingId = c.id }
+                            ),
+                            student = null
+                        )
+                    }
 
-            val title = TextView(this).apply {
-                text = "Student: ${record.deviceKeyId.take(8).joinToString("") { "%02X".format(it) }}..."
-                textSize = 14f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#212121"))
-            }
-
-            val details = TextView(this).apply {
-                val timeStr = sdf.format(Date(record.recordedAt * 1000))
-                text = "Time: $timeStr | RSSI: ${"%.1f".format(record.rssiMean)} dBm (σ²=${"%.1f".format(record.rssiVariance)}) | N=${record.sampleCount}"
-                textSize = 12f
-                setTextColor(Color.parseColor("#616161"))
-            }
-
-            row.addView(title)
-            row.addView(details)
-            authRosterContainer.addView(row)
-        }
-    }
-
-    private fun buildMainLayout(): View {
-        val root = ScrollView(this).apply {
-            setBackgroundColor(Color.parseColor("#F8F9FA"))
-        }
-
-        val container = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(32, 40, 32, 40)
-        }
-
-        // Header
-        val header = TextView(this).apply {
-            text = "AntiProxy"
-            textSize = 28f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#1A73E8"))
-        }
-
-        val subtitle = TextView(this).apply {
-            text = "Ultra-Fast Offline BLE Attendance Verification"
-            textSize = 14f
-            setTextColor(Color.parseColor("#5F6368"))
-            setPadding(0, 4, 0, 24)
-        }
-
-        // Role Switcher Tabs
-        roleToggleGroup = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(8, 8, 8, 8)
-            background = cardBackground(Color.parseColor("#E8EAED"))
-        }
-
-        authorityBtn = Button(this).apply {
-            text = "Instructor / Authority"
-            isSelected = true
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchRole(Role.AUTHORITY) }
-        }
-
-        studentBtn = Button(this).apply {
-            text = "Student Node"
-            isSelected = false
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { switchRole(Role.STUDENT) }
-        }
-
-        roleToggleGroup.addView(authorityBtn)
-        roleToggleGroup.addView(studentBtn)
-
-        // Subcontainers
-        authorityContainer = buildAuthoritySection()
-        studentContainer = buildStudentSection().apply { visibility = View.GONE }
-
-        container.addView(header)
-        container.addView(subtitle)
-        container.addView(roleToggleGroup)
-        container.addView(space(24))
-        container.addView(authorityContainer)
-        container.addView(studentContainer)
-
-        root.addView(container)
-        return root
-    }
-
-    private fun switchRole(role: Role) {
-        currentRole = role
-        if (role == Role.AUTHORITY) {
-            authorityContainer.visibility = View.VISIBLE
-            studentContainer.visibility = View.GONE
-            authorityBtn.setTextColor(Color.parseColor("#1A73E8"))
-            studentBtn.setTextColor(Color.parseColor("#5F6368"))
-        } else {
-            authorityContainer.visibility = View.GONE
-            studentContainer.visibility = View.VISIBLE
-            authorityBtn.setTextColor(Color.parseColor("#5F6368"))
-            studentBtn.setTextColor(Color.parseColor("#1A73E8"))
-        }
-    }
-
-    // ==================== AUTHORITY UI ====================
-
-    private fun buildAuthoritySection(): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        // Status Card
-        val statusCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-        }
-
-        authSessionStatusText = TextView(this).apply {
-            text = "○ SESSION IDLE"
-            textSize = 14f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#9E9E9E"))
-        }
-
-        val countLabel = TextView(this).apply {
-            text = "Verified Attendees"
-            textSize = 13f
-            setTextColor(Color.parseColor("#757575"))
-            setPadding(0, 12, 0, 0)
-        }
-
-        authCountText = TextView(this).apply {
-            text = "0"
-            textSize = 48f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-        }
-
-        val btnRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            setPadding(0, 16, 0, 0)
-        }
-
-        authStartBtn = Button(this).apply {
-            text = "Start Session (5m)"
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { startAuthoritySession() }
-        }
-
-        authStopBtn = Button(this).apply {
-            text = "Stop Session"
-            isEnabled = false
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
-            setOnClickListener { stopAuthoritySession() }
-        }
-
-        btnRow.addView(authStartBtn)
-        btnRow.addView(authStopBtn)
-
-        statusCard.addView(authSessionStatusText)
-        statusCard.addView(countLabel)
-        statusCard.addView(authCountText)
-        statusCard.addView(btnRow)
-
-        // Key & Provisioning Card
-        val keyCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = 20
-            layoutParams = lp
-        }
-
-        val keyTitle = TextView(this).apply {
-            text = "Authority Identity & Provisioning"
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-        }
-
-        authKeyDetailsText = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.parseColor("#5F6368"))
-            setPadding(0, 8, 0, 12)
-        }
-
-        val copyKeyBtn = Button(this).apply {
-            text = "Copy Authority Public Key"
-            setOnClickListener { copyAuthorityKeyToClipboard() }
-        }
-
-        val enrollStudentBtn = Button(this).apply {
-            text = "Enroll Student Public Key"
-            setOnClickListener { showEnrollStudentDialog() }
-        }
-
-        keyCard.addView(keyTitle)
-        keyCard.addView(authKeyDetailsText)
-        keyCard.addView(copyKeyBtn)
-        keyCard.addView(enrollStudentBtn)
-
-        // Live Roster Card
-        val rosterCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = 20
-            layoutParams = lp
-        }
-
-        val rosterTitle = TextView(this).apply {
-            text = "Live Verification Feed"
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-            setPadding(0, 0, 0, 8)
-        }
-
-        authRosterContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        rosterCard.addView(rosterTitle)
-        rosterCard.addView(authRosterContainer)
-
-        root.addView(statusCard)
-        root.addView(keyCard)
-        root.addView(rosterCard)
-
-        return root
-    }
-
-    private fun startAuthoritySession() {
-        if (!keyManager.hasKey(authorityKeyAlias)) {
-            keyManager.generateKey(authorityKeyAlias)
-            refreshAuthorityKeys()
-        }
-        AuthorityGattService.start(this, authorityKeyAlias, durationSeconds = 300)
-    }
-
-    private fun stopAuthoritySession() {
-        AuthorityGattService.stop(this)
-    }
-
-    private fun refreshAuthorityKeys() {
-        if (!keyManager.hasKey(authorityKeyAlias)) {
-            authKeyDetailsText.text = "No key generated yet. Tap Start Session to auto-create."
-            return
-        }
-        val pub = keyManager.getPublicKey(authorityKeyAlias) ?: return
-        val keyId = antiproxy.core.crypto.computeKeyId(pub)
-        val enrolledCount = authorityStore.getAllStudentKeys().size
-        authKeyDetailsText.text = "Key ID: ${keyId.toHex()}\nEnrolled Students in Roster: $enrolledCount"
-    }
-
-    private fun copyAuthorityKeyToClipboard() {
-        val pub = keyManager.getPublicKey(authorityKeyAlias)
-        if (pub == null) {
-            Toast.makeText(this, "Generate a key first", Toast.LENGTH_SHORT).show()
-            return
-        }
-        val b64 = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Base64.getEncoder().encodeToString(pub.bytes)
-        } else {
-            android.util.Base64.encodeToString(pub.bytes, android.util.Base64.NO_WRAP)
-        }
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("Authority Public Key", b64))
-        Toast.makeText(this, "Authority Key copied to clipboard!", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showEnrollStudentDialog() {
-        val input = EditText(this).apply {
-            hint = "Paste student public key Base64"
-            minLines = 3
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Enroll Student Key")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val text = input.text.toString().trim()
-                if (text.isNotEmpty()) {
-                    try {
-                        val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            Base64.getDecoder().decode(text)
-                        } else {
-                            android.util.Base64.decode(text, android.util.Base64.DEFAULT)
-                        }
-                        val pub = PublicKeyBytes(raw)
-                        val kid = antiproxy.core.crypto.computeKeyId(pub)
-                        authorityStore.cacheStudentKey(kid, pub)
-                        refreshAuthorityKeys()
-                        Toast.makeText(this, "Student enrolled! Key ID: ${kid.toHex()}", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Toast.makeText(this, "Invalid key format: ${e.message}", Toast.LENGTH_LONG).show()
+                    openJoined != null -> {
+                        // Students read the class list from Firestore; teachers already have it with their classes
+                        val classmates by remember(s.id) { classVm.people(s.id) }.collectAsStateWithLifecycle(emptyList())
+                        val c = openJoined.classroom
+                        val prompt = prompts.firstOrNull { it.classroom.id == c.id }
+                        ClassScreen(
+                            classroom = c,
+                            members = classmates,
+                            myUid = state.user?.uid,
+                            snackbar = snackbar,
+                            onBack = { openClassId = null },
+                            teacher = null,
+                            student = StudentControls(
+                                status = openJoined.status,
+                                checkIn = checkIn,
+                                history = classVm.recordsFor(c, history),
+                                prompt = prompt,
+                                onMarkAttendance = {
+                                    prompt?.let(classVm::dismissPrompt)
+                                    markAttendance()
+                                },
+                                onUnenroll = { unenrollingId = c.id }
+                            )
+                        )
                     }
                 }
             }
-            .setNegativeButton("Cancel", null)
-            .show()
+
+            Screen.Home -> HomeScreen(
+                role = role,
+                userName = state.displayName.orEmpty(),
+                userPhoto = state.user?.photoUrl?.toString().orEmpty(),
+                teaching = teaching,
+                joined = joined,
+                liveClassIds = liveClassIds,
+                snackbar = snackbar,
+                onOpenClass = { openClassId = it },
+                onSettings = { showSettings = true },
+                newVersion = newRelease?.tagName,
+                onUpdate = updateVm::openUpdateSheet,
+                onNewClass = { creating = true },
+                onJoinClass = classVm::openJoin,
+                onEdit = { editingId = it.id },
+                onDelete = { deletingId = it.id },
+                onUnenroll = { unenrollingId = it.id }
+            )
+        }
     }
 
-    // ==================== STUDENT UI ====================
-
-    private fun buildStudentSection(): LinearLayout {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        // Action Card
-        val actionCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-        }
-
-        val actionTitle = TextView(this).apply {
-            text = "Student Attendance Node"
-            textSize = 18f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-        }
-
-        studentKeyStatusText = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.parseColor("#5F6368"))
-            setPadding(0, 4, 0, 16)
-        }
-
-        studentCheckInBtn = Button(this).apply {
-            text = "Check In / Mark Attendance"
-            setBackgroundColor(Color.parseColor("#1A73E8"))
-            setTextColor(Color.WHITE)
-            textSize = 16f
-            setOnClickListener { performStudentCheckIn() }
-        }
-
-        studentProgressBar = ProgressBar(this).apply {
-            isIndeterminate = true
-            visibility = View.GONE
-            setPadding(0, 16, 0, 8)
-        }
-
-        studentProgressText = TextView(this).apply {
-            text = "Ready to scan"
-            textSize = 13f
-            setTextColor(Color.parseColor("#5F6368"))
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(0, 8, 0, 0)
-        }
-
-        actionCard.addView(actionTitle)
-        actionCard.addView(studentKeyStatusText)
-        actionCard.addView(studentCheckInBtn)
-        actionCard.addView(studentProgressBar)
-        actionCard.addView(studentProgressText)
-
-        // Provisioning Card
-        val provCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = 20
-            layoutParams = lp
-        }
-
-        val provTitle = TextView(this).apply {
-            text = "Device Setup & Pairing"
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-        }
-
-        studentAuthorityStatusText = TextView(this).apply {
-            textSize = 12f
-            setTextColor(Color.parseColor("#5F6368"))
-            setPadding(0, 4, 0, 12)
-        }
-
-        val copyStudentKeyBtn = Button(this).apply {
-            text = "Copy My Public Key (For Instructor)"
-            setOnClickListener { copyStudentKeyToClipboard() }
-        }
-
-        val pairAuthorityBtn = Button(this).apply {
-            text = "Pair Authority Public Key"
-            setOnClickListener { showPairAuthorityDialog() }
-        }
-
-        provCard.addView(provTitle)
-        provCard.addView(studentAuthorityStatusText)
-        provCard.addView(copyStudentKeyBtn)
-        provCard.addView(pairAuthorityBtn)
-
-        // History Card
-        val histCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 24)
-            background = cardBackground(Color.WHITE)
-            val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-            lp.topMargin = 20
-            layoutParams = lp
-        }
-
-        val histTitle = TextView(this).apply {
-            text = "Local Attendance History"
-            textSize = 16f
-            setTypeface(null, Typeface.BOLD)
-            setTextColor(Color.parseColor("#202124"))
-            setPadding(0, 0, 0, 8)
-        }
-
-        studentHistoryContainer = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-
-        histCard.addView(histTitle)
-        histCard.addView(studentHistoryContainer)
-
-        root.addView(actionCard)
-        root.addView(provCard)
-        root.addView(histCard)
-
-        return root
-    }
-
-    private fun refreshStudentKeys() {
-        if (!keyManager.hasKey(studentKeyAlias)) {
-            val gen = keyManager.generateKey(studentKeyAlias)
-            studentStore.saveEnrollment(gen.keyId, gen.securityLevel, System.currentTimeMillis() / 1000)
-        }
-        val enrollment = studentStore.getEnrollmentState()
-        val secLevel = enrollment.keySecurityLevel?.name ?: "UNKNOWN"
-        val kidHex = enrollment.deviceKeyId?.take(8)?.joinToString("") { "%02X".format(it) } ?: "None"
-        studentKeyStatusText.text = "Hardware Key ID: $kidHex... ($secLevel)"
-
-        val knownAuth = studentStore.getTrustedAuthorityKeys()
-        studentAuthorityStatusText.text = "Trusted Authorities: ${knownAuth.size} paired"
-    }
-
-    private fun copyStudentKeyToClipboard() {
-        val pub = keyManager.getPublicKey(studentKeyAlias) ?: return
-        val b64 = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            Base64.getEncoder().encodeToString(pub.bytes)
-        } else {
-            android.util.Base64.encodeToString(pub.bytes, android.util.Base64.NO_WRAP)
-        }
-        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-        cm.setPrimaryClip(ClipData.newPlainText("Student Public Key", b64))
-        Toast.makeText(this, "Student Key copied! Share with instructor.", Toast.LENGTH_SHORT).show()
-    }
-
-    private fun showPairAuthorityDialog() {
-        val input = EditText(this).apply {
-            hint = "Paste authority public key Base64"
-            minLines = 3
-        }
-
-        AlertDialog.Builder(this)
-            .setTitle("Pair Authority Key")
-            .setView(input)
-            .setPositiveButton("Save") { _, _ ->
-                val text = input.text.toString().trim()
-                if (text.isNotEmpty()) {
-                    try {
-                        val raw = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-                            Base64.getDecoder().decode(text)
-                        } else {
-                            android.util.Base64.decode(text, android.util.Base64.DEFAULT)
-                        }
-                        val pub = PublicKeyBytes(raw)
-                        val kid = antiproxy.core.crypto.computeKeyId(pub)
-                        studentStore.saveTrustedAuthorityKey(kid, pub)
-                        refreshStudentKeys()
-                        Toast.makeText(this, "Authority paired! Key ID: ${kid.toHex()}", Toast.LENGTH_SHORT).show()
-                    } catch (e: Exception) {
-                        Toast.makeText(this, "Invalid key format: ${e.message}", Toast.LENGTH_LONG).show()
-                    }
-                }
+    if (creating) {
+        ClassFormDialog(
+            initial = null,
+            onDismiss = { creating = false },
+            onSave = { name, details ->
+                creating = false
+                classVm.createClassroom(name, details)
             }
-            .setNegativeButton("Cancel", null)
-            .show()
-    }
-
-    private fun performStudentCheckIn() {
-        val knownAuth = studentStore.getTrustedAuthorityKeys()
-        if (knownAuth.isEmpty()) {
-            Toast.makeText(this, "Please pair an Authority Public Key first!", Toast.LENGTH_LONG).show()
-            return
-        }
-
-        studentCheckInBtn.isEnabled = false
-        studentProgressBar.visibility = View.VISIBLE
-        studentProgressText.text = "Scanning for Authority BLE beacon..."
-
-        val flow = StudentFlow(
-            context = this,
-            keyManager = keyManager,
-            keyAlias = studentKeyAlias,
-            studentStore = studentStore,
-            knownAuthorityKeys = knownAuth
         )
-
-        flow.onStateChanged = { state ->
-            runOnUiThread {
-                when (state) {
-                    is StudentCheckInState.Scanning -> {
-                        studentProgressText.text = "Scanning broadcast channels..."
-                    }
-                    is StudentCheckInState.Discovered -> {
-                        studentProgressText.text = "Found beacon! Sampled ${state.sampleCount} RSSI packets (Avg: ${"%.1f".format(state.meanRssi)} dBm)"
-                    }
-                    is StudentCheckInState.Connecting -> {
-                        studentProgressText.text = "Connecting via ultra-fast GATT channel..."
-                    }
-                    is StudentCheckInState.VerifyingSession -> {
-                        studentProgressText.text = "Verifying Authority cryptographic session..."
-                    }
-                    is StudentCheckInState.SigningProof -> {
-                        studentProgressText.text = "Signing proof with Android Keystore..."
-                    }
-                    is StudentCheckInState.Submitting -> {
-                        studentProgressText.text = "Submitting proof envelope & awaiting ACK..."
-                    }
-                    is StudentCheckInState.Success -> {
-                        studentProgressText.text = "✓ Attendance Confirmed! Recorded in local ledger."
-                        studentProgressText.setTextColor(Color.parseColor("#2E7D32"))
-                        studentProgressBar.visibility = View.GONE
-                        studentCheckInBtn.isEnabled = true
-                        refreshStudentHistory()
-                    }
-                    is StudentCheckInState.Rejected -> {
-                        studentProgressText.text = "✕ Rejected: ${state.reason}"
-                        studentProgressText.setTextColor(Color.parseColor("#C62828"))
-                        studentProgressBar.visibility = View.GONE
-                        studentCheckInBtn.isEnabled = true
-                    }
-                    is StudentCheckInState.Error -> {
-                        studentProgressText.text = "✕ Error: ${state.message}"
-                        studentProgressText.setTextColor(Color.parseColor("#C62828"))
-                        studentProgressBar.visibility = View.GONE
-                        studentCheckInBtn.isEnabled = true
-                    }
-                    else -> {}
-                }
-            }
-        }
-
-        scope.launch {
-            try {
-                flow.performAttendance()
-            } catch (e: Exception) {
-                studentProgressText.text = "Failed: ${e.message}"
-                studentProgressBar.visibility = View.GONE
-                studentCheckInBtn.isEnabled = true
-            }
-        }
     }
 
-    private fun refreshStudentHistory() {
-        studentHistoryContainer.removeAllViews()
-        val records = studentStore.getAttendanceHistory(10)
-        if (records.isEmpty()) {
-            val empty = TextView(this).apply {
-                text = "No recorded attendance yet."
-                textSize = 13f
-                setTextColor(Color.parseColor("#757575"))
-                setPadding(0, 12, 0, 12)
+    teaching.firstOrNull { it.classroom.id == editingId }?.let { tc ->
+        ClassFormDialog(
+            initial = tc.classroom,
+            onDismiss = { editingId = null },
+            onSave = { name, details ->
+                editingId = null
+                classVm.editClassroom(tc.classroom, name, details)
             }
-            studentHistoryContainer.addView(empty)
-            return
-        }
-
-        val sdf = SimpleDateFormat("MMM dd, yyyy HH:mm:ss", Locale.getDefault())
-        records.forEach { record ->
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                setPadding(16, 12, 16, 12)
-                background = cardBackground(Color.parseColor("#F5F5F5"))
-                val lp = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
-                lp.bottomMargin = 8
-                layoutParams = lp
-            }
-
-            val title = TextView(this).apply {
-                text = "Session: ${record.sessionId.take(8).joinToString("") { "%02X".format(it) }}..."
-                textSize = 14f
-                setTypeface(null, Typeface.BOLD)
-                setTextColor(Color.parseColor("#212121"))
-            }
-
-            val details = TextView(this).apply {
-                val timeStr = sdf.format(Date(record.recordedAt * 1000))
-                text = "$timeStr | Mean RSSI: ${"%.1f".format(record.rssiMean)} dBm"
-                textSize = 12f
-                setTextColor(Color.parseColor("#616161"))
-            }
-
-            row.addView(title)
-            row.addView(details)
-            studentHistoryContainer.addView(row)
-        }
+        )
     }
 
-    // ==================== HELPERS ====================
-
-    private fun cardBackground(color: Int): GradientDrawable {
-        return GradientDrawable().apply {
-            setColor(color)
-            cornerRadius = 16f
-        }
+    teaching.firstOrNull { it.classroom.id == deletingId }?.let { tc ->
+        DeleteClassDialog(
+            classroom = tc.classroom,
+            students = tc.members.size,
+            onDismiss = { deletingId = null },
+            onDelete = {
+                deletingId = null
+                if (attendingId == tc.classroom.id) endAttendance(tc.classroom)
+                classVm.deleteClassroom(tc.classroom)
+            }
+        )
     }
 
-    private fun space(heightDp: Int): View {
-        return View(this).apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, (heightDp * resources.displayMetrics.density).toInt())
-        }
+    joined.firstOrNull { it.classroom.id == unenrollingId }?.let { jc ->
+        UnenrollDialog(
+            classroom = jc.classroom,
+            onDismiss = { unenrollingId = null },
+            onUnenroll = {
+                unenrollingId = null
+                classVm.leave(jc.classroom)
+            }
+        )
     }
 
-    private fun KeyId.toHex(): String = bytes.joinToString("") { "%02X".format(it) }
+    InviteDialogs(
+        state = invite,
+        onLookUp = classVm::lookUp,
+        onAccept = classVm::acceptInvite,
+        onDismiss = classVm::closeInvite
+    )
+
+    prompts.firstOrNull()?.takeIf { role == AppRole.Student }?.let { prompt ->
+        AttendancePromptDialog(
+            prompt = prompt,
+            onMark = {
+                classVm.dismissPrompt(prompt)
+                markAttendance()
+            },
+            onNotNow = { classVm.dismissPrompt(prompt) }
+        )
+    }
+
+    // Shown in any role: a student can open the app as a teacher first
+    val deletedNotice = joined.firstOrNull { it.status == MembershipStatus.ClassroomDeleted }
+    deletedNotice?.let { deleted ->
+        DeletedClassroomNotice(deleted.classroom, onOk = { classVm.acknowledgeDeletion(deleted.classroom) })
+    }
+
+    // Updates wait behind anything about attendance or classes, so prompts never stack
+    val classPromptShowing = deletedNotice != null || (role == AppRole.Student && prompts.isNotEmpty())
+    val release = newRelease
+    if (showUpdateSheet && release != null && !classPromptShowing) {
+        UpdateBottomSheet(
+            release = release,
+            settings = updateSettings,
+            download = download,
+            onDownload = { bestApk(release.assets)?.let(updateVm::download) },
+            onCancelDownload = updateVm::cancelDownload,
+            onDownloadHandled = updateVm::resetDownload,
+            onNeverWarn = { updateVm.update { it.copy(warnBeforeDownload = false) } },
+            onDismiss = updateVm::dismissUpdateSheet
+        )
+    } else if (showChangelog && !classPromptShowing) {
+        ChangelogBottomSheet(
+            releases = changelog.releases,
+            loading = changelog.loading,
+            failed = changelog.failed,
+            onDismiss = updateVm::dismissChangelog
+        )
+    }
 }

@@ -1,0 +1,14 @@
+{
+  "name": "antiproxy-firestore-rules-tests",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Security rules tests for AntiProxy Firestore (classrooms, members, sessions)",
+  "scripts": {
+    "test": "firebase emulators:exec --only firestore --project demo-antiproxy \"mocha rules.test.js --timeout 20000\""
+  },
+  "devDependencies": {
+    "@firebase/rules-unit-testing": "^4.0.1",
+    "firebase-tools": "^13.29.1",
+    "mocha": "^10.8.2"
+  }
+}
