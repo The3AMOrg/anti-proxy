@@ -4,6 +4,8 @@ import android.bluetooth.*
 import android.bluetooth.le.*
 import android.content.Context
 import antiproxy.core.protocol.StatusCode
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * Authority BLE advertising and GATT server manager.
@@ -33,12 +35,21 @@ class AuthorityAdvertiser(private val context: Context) {
         }
     }
 
-    fun start(sessionSignedBytes: ByteArray, onProofReceived: ProofReceivedCallback) {
+    suspend fun start(sessionSignedBytes: ByteArray, onProofReceived: ProofReceivedCallback) {
         val adapter = bluetoothAdapter ?: error("Bluetooth not supported on this device")
         check(adapter.isEnabled) { "Bluetooth is disabled" }
 
         val serverCallback = GattServerCallback(onProofReceived)
         serverCallback.sessionSignedBytes = sessionSignedBytes
+
+        val serviceAddedDeferred = CompletableDeferred<Boolean>()
+        serverCallback.onServiceAddedListener = { status, _ ->
+            if (status == BluetoothGatt.GATT_SUCCESS) {
+                serviceAddedDeferred.complete(true)
+            } else {
+                serviceAddedDeferred.complete(false)
+            }
+        }
 
         val server = bluetoothManager.openGattServer(context, serverCallback)
             ?: error("Failed to open BluetoothGattServer")
@@ -71,8 +82,22 @@ class AuthorityAdvertiser(private val context: Context) {
         statusChar.addDescriptor(cccd)
         service.addCharacteristic(statusChar)
 
-        server.addService(service)
         serverCallback.setGattServer(server, statusChar)
+
+        val addResult = server.addService(service)
+        if (!addResult) {
+            server.close()
+            error("BluetoothGattServer.addService returned false")
+        }
+
+        val serviceAdded = withTimeoutOrNull(5000L) {
+            serviceAddedDeferred.await()
+        } ?: false
+
+        if (!serviceAdded) {
+            server.close()
+            error("Failed to add GATT service (timeout or GATT error)")
+        }
 
         this.gattServer = server
         this.callback = serverCallback
@@ -102,12 +127,28 @@ class AuthorityAdvertiser(private val context: Context) {
         callback?.sendStatusIndication(deviceAddress, status)
     }
 
+    fun disconnectClient(device: BluetoothDevice) {
+        callback?.disconnectClient(device)
+    }
+
+    fun disconnectClient(deviceAddress: String) {
+        callback?.disconnectClient(deviceAddress)
+    }
+
+    fun cleanupStaleConnections(timeoutMs: Long = 5000L) {
+        callback?.cleanupStaleConnections(timeoutMs)
+    }
+
     fun stop() {
         try {
             if (advertising) {
                 advertiser?.stopAdvertising(advertiseCallback)
                 advertising = false
             }
+        } catch (_: Exception) { }
+
+        try {
+            callback?.close()
         } catch (_: Exception) { }
 
         try {

@@ -1,9 +1,15 @@
 package org.ap.protocol.ble
 
 import android.bluetooth.*
+import android.os.Build
 import antiproxy.core.fragmentation.Reassembler
 import antiproxy.core.fragmentation.ReassemblyResult
 import antiproxy.core.protocol.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
 import java.util.concurrent.ConcurrentHashMap
 
 fun interface ProofReceivedCallback {
@@ -11,8 +17,9 @@ fun interface ProofReceivedCallback {
 }
 
 /**
- * High-performance GATT server callback for the Authority.
- * Handles Session reads, Proof fragment writes, CCCD subscriptions, and Status indications.
+ * High-performance, concurrent GATT server callback for the Authority.
+ * Handles Session reads, Proof fragment writes, CCCD subscriptions, Status indications,
+ * and actively cleans up connections to prevent hardware channel starvation.
  */
 class GattServerCallback(
     private val onProofReceived: ProofReceivedCallback
@@ -21,8 +28,12 @@ class GattServerCallback(
     @Volatile
     var sessionSignedBytes: ByteArray? = null
 
+    var onServiceAddedListener: ((status: Int, service: BluetoothGattService) -> Unit)? = null
+
+    private val callbackScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val reassemblers = ConcurrentHashMap<String, Reassembler>()
     private val connectedDevices = ConcurrentHashMap<String, BluetoothDevice>()
+    private val connectionTimestamps = ConcurrentHashMap<String, Long>()
 
     @Volatile
     private var gattServer: BluetoothGattServer? = null
@@ -30,16 +41,24 @@ class GattServerCallback(
     @Volatile
     private var statusCharacteristic: BluetoothGattCharacteristic? = null
 
+    private val indicationLock = Any()
+
     fun setGattServer(server: BluetoothGattServer, statusChar: BluetoothGattCharacteristic) {
         this.gattServer = server
         this.statusCharacteristic = statusChar
     }
 
+    override fun onServiceAdded(status: Int, service: BluetoothGattService) {
+        onServiceAddedListener?.invoke(status, service)
+    }
+
     override fun onConnectionStateChange(device: BluetoothDevice, status: Int, newState: Int) {
         if (newState == BluetoothProfile.STATE_CONNECTED) {
             connectedDevices[device.address] = device
+            connectionTimestamps[device.address] = System.currentTimeMillis()
         } else if (newState == BluetoothProfile.STATE_DISCONNECTED) {
             connectedDevices.remove(device.address)
+            connectionTimestamps.remove(device.address)
             reassemblers.remove(device.address)
         }
     }
@@ -116,7 +135,10 @@ class GattServerCallback(
         when (result) {
             is ReassemblyResult.Complete -> {
                 reassemblers.remove(device.address)
-                onProofReceived.onProofReceived(device, result.payload)
+                // Offload crypto verification and SQLite write off the Bluetooth Binder thread
+                callbackScope.launch {
+                    onProofReceived.onProofReceived(device, result.payload)
+                }
             }
             is ReassemblyResult.Error -> {
                 reassemblers.remove(device.address)
@@ -149,20 +171,66 @@ class GattServerCallback(
         }
     }
 
-    fun sendStatusIndication(device: BluetoothDevice, status: StatusCode) {
-        val server = gattServer ?: return
-        val char = statusCharacteristic ?: return
-        char.value = byteArrayOf(status.code)
-        server.notifyCharacteristicChanged(device, char, true)
+    fun sendStatusIndication(device: BluetoothDevice, status: StatusCode): Boolean {
+        val server = gattServer ?: return false
+        val char = statusCharacteristic ?: return false
+        val statusBytes = byteArrayOf(status.code)
+        return synchronized(indicationLock) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val res = server.notifyCharacteristicChanged(device, char, true, statusBytes)
+                res == BluetoothStatusCodes.SUCCESS
+            } else {
+                char.value = statusBytes
+                server.notifyCharacteristicChanged(device, char, true)
+            }
+        }
     }
 
-    fun sendStatusIndication(deviceAddress: String, status: StatusCode) {
-        val device = connectedDevices[deviceAddress] ?: return
-        sendStatusIndication(device, status)
+    fun sendStatusIndication(deviceAddress: String, status: StatusCode): Boolean {
+        val device = connectedDevices[deviceAddress] ?: return false
+        return sendStatusIndication(device, status)
+    }
+
+    fun disconnectClient(device: BluetoothDevice) {
+        try {
+            gattServer?.cancelConnection(device)
+        } catch (_: Exception) { }
+        connectedDevices.remove(device.address)
+        connectionTimestamps.remove(device.address)
+        reassemblers.remove(device.address)
+    }
+
+    fun disconnectClient(deviceAddress: String) {
+        val device = connectedDevices[deviceAddress]
+        if (device != null) {
+            disconnectClient(device)
+        } else {
+            connectedDevices.remove(deviceAddress)
+            connectionTimestamps.remove(deviceAddress)
+            reassemblers.remove(deviceAddress)
+        }
+    }
+
+    fun cleanupStaleConnections(timeoutMs: Long = 5_000L) {
+        val now = System.currentTimeMillis()
+        connectedDevices.forEach { (address, device) ->
+            val connectedAt = connectionTimestamps[address] ?: now
+            if (now - connectedAt > timeoutMs) {
+                disconnectClient(device)
+            }
+        }
+        cleanupStaleReassemblers()
     }
 
     fun cleanupStaleReassemblers() {
         val stale = reassemblers.entries.filter { it.value.isTimedOut() }.map { it.key }
         stale.forEach { reassemblers.remove(it) }
+    }
+
+    fun close() {
+        callbackScope.cancel()
+        connectedDevices.clear()
+        connectionTimestamps.clear()
+        reassemblers.clear()
     }
 }

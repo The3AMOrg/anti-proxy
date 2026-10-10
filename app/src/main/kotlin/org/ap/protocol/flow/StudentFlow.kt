@@ -85,12 +85,12 @@ class StudentFlow(
         delay(slotDelay)
 
         var retryNumber = 0
-        val client = StudentGattClient(context)
 
         while (true) {
+            val client = StudentGattClient(context)
             try {
                 return executeVerification(client, discovered, enrollment)
-            } catch (e: Exception) {
+            } catch (e: GattTransportException) {
                 client.disconnect()
                 if (!RetryScheduler.canRetry(retryNumber)) {
                     val err = "Attendance failed after retries: ${e.message}"
@@ -105,6 +105,11 @@ class StudentFlow(
                 }
                 retryNumber++
                 delay(retryDelay)
+            } catch (e: Exception) {
+                client.disconnect()
+                val err = "Attendance failed: ${e.message}"
+                onStateChanged?.invoke(StudentCheckInState.Error(err, e))
+                return AttendanceResult.Error(err, e)
             }
         }
     }
@@ -117,29 +122,30 @@ class StudentFlow(
         onStateChanged?.invoke(StudentCheckInState.Connecting)
 
         if (!client.connect(discovered.deviceAddress)) {
-            return AttendanceResult.Error("Failed to connect to Authority")
+            throw GattTransportException("Failed to connect to Authority")
         }
 
         client.requestMtu()
 
         if (!client.discoverServices()) {
-            client.disconnect()
-            return AttendanceResult.Error("Failed to discover services")
+            throw GattTransportException("Failed to discover services")
         }
 
         onStateChanged?.invoke(StudentCheckInState.VerifyingSession)
 
-        val sessionBytes = client.readSession()
+        val sessionBytes = try {
+            client.readSession()
+        } catch (e: Exception) {
+            throw GattTransportException("Failed to read session: ${e.message}", e)
+        }
         if (sessionBytes.size != SESSION_SIGNED_SIZE) {
-            client.disconnect()
-            return AttendanceResult.Error("Invalid session byte size: ${sessionBytes.size}")
+            throw GattTransportException("Invalid session byte size: ${sessionBytes.size}")
         }
 
         val signedSession = try {
             decodeSessionSigned(sessionBytes)
         } catch (e: Exception) {
-            client.disconnect()
-            return AttendanceResult.Error("Failed to decode session: ${e.message}")
+            throw GattTransportException("Failed to decode session: ${e.message}", e)
         }
 
         val nowSeconds = System.currentTimeMillis() / 1000
@@ -185,16 +191,24 @@ class StudentFlow(
         val envelopeBytes = encodeProofEnvelope(proofEnvelope)
 
         if (!client.enableStatusIndications()) {
-            client.disconnect()
-            return AttendanceResult.Error("Failed to enable status indications")
+            throw GattTransportException("Failed to enable status indications")
         }
 
         onStateChanged?.invoke(StudentCheckInState.Submitting)
 
-        client.writeProofEnvelope(envelopeBytes)
+        try {
+            client.writeProofEnvelope(envelopeBytes)
+        } catch (e: Exception) {
+            throw GattTransportException("Failed to write proof envelope: ${e.message}", e)
+        }
 
-        val statusCode = client.awaitStatusIndication()
-        client.disconnect()
+        val statusCode = try {
+            client.awaitStatusIndication()
+        } catch (e: Exception) {
+            throw GattTransportException("Timeout or error waiting for status indication: ${e.message}", e)
+        } finally {
+            client.disconnect()
+        }
 
         if (statusCode == StatusCode.SUCCESS) {
             val record = AttendanceRecord(
@@ -228,6 +242,8 @@ class StudentFlow(
             studentStore.recordAttendance(record, syncEvent)
             onStateChanged?.invoke(StudentCheckInState.Success(record))
             return AttendanceResult.Success(record)
+        } else if (statusCode == StatusCode.MTU_OR_FRAGMENT_ERROR) {
+            throw GattTransportException("Fragment transmission error: ${statusCode.name}")
         } else {
             val reason = "Rejected by Authority: ${statusCode.name}"
             onStateChanged?.invoke(StudentCheckInState.Rejected(statusCode, reason))

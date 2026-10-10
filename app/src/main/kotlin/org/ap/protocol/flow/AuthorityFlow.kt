@@ -2,6 +2,7 @@ package org.ap.protocol.flow
 
 import android.bluetooth.BluetoothDevice
 import android.content.Context
+import kotlinx.coroutines.*
 import org.ap.protocol.ble.AuthorityAdvertiser
 import org.ap.protocol.ble.ProofReceivedCallback
 import org.ap.protocol.keystore.AndroidKeyManager
@@ -41,6 +42,7 @@ class AuthorityFlow(
     private var sessionState: SessionState = SessionState.IDLE
 
     private var advertiser: AuthorityAdvertiser? = null
+    private var sessionScope: CoroutineScope? = null
     private val secureRandom = SecureRandom()
 
     var onAttendanceRecorded: ((record: AttendanceRecord?, status: StatusCode) -> Unit)? = null
@@ -122,10 +124,21 @@ class AuthorityFlow(
         currentSession = session
 
         // 6. Begin BLE Advertising & GATT Server
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        this.sessionScope = scope
+
         val adv = AuthorityAdvertiser(context)
         adv.start(signedBytes, ProofReceivedCallback { device, envelopeData ->
             handleProofReceived(device, envelopeData)
         })
+
+        // Periodic reaper to reclaim stale central connections (e.g. crashed students)
+        scope.launch {
+            while (isActive) {
+                delay(2000L)
+                adv.cleanupStaleConnections(5000L)
+            }
+        }
 
         this.advertiser = adv
         sessionState = SessionState.ACTIVE
@@ -135,6 +148,8 @@ class AuthorityFlow(
 
     override suspend fun stopSession() {
         sessionState = SessionState.STOPPING
+        sessionScope?.cancel()
+        sessionScope = null
         advertiser?.stop()
         advertiser = null
         currentSession = null
@@ -171,6 +186,7 @@ class AuthorityFlow(
             } catch (_: Exception) {
                 advertiser?.sendStatus(device, StatusCode.MALFORMED_FRAME)
                 onAttendanceRecorded?.invoke(null, StatusCode.MALFORMED_FRAME)
+                disconnectAfterAck(device)
                 return
             }
 
@@ -206,6 +222,7 @@ class AuthorityFlow(
             if (!committed) {
                 advertiser?.sendStatus(device, StatusCode.INTERNAL_STORAGE_FAILURE)
                 onAttendanceRecorded?.invoke(null, StatusCode.INTERNAL_STORAGE_FAILURE)
+                disconnectAfterAck(device)
                 return
             }
             recordedRecord = record
@@ -213,5 +230,18 @@ class AuthorityFlow(
 
         advertiser?.sendStatus(device, status)
         onAttendanceRecorded?.invoke(recordedRecord, status)
+        disconnectAfterAck(device)
+    }
+
+    private fun disconnectAfterAck(device: BluetoothDevice) {
+        val scope = sessionScope
+        if (scope != null) {
+            scope.launch {
+                delay(200L) // Wait 200ms for status indication ATT confirmation over air
+                advertiser?.disconnectClient(device)
+            }
+        } else {
+            advertiser?.disconnectClient(device)
+        }
     }
 }

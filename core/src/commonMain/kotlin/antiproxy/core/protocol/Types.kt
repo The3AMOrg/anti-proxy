@@ -20,9 +20,9 @@ const val PROOF_CHAR_UUID_STRING = "5262b34c-79b9-472b-9beb-652aa023d3ce"
 const val STATUS_CHAR_UUID_STRING = "63c56110-34fa-4d02-958e-54c4cb940ec8"
 
 // Timing constants
-const val DEFAULT_VERIFICATION_WINDOW_SECONDS = 20
+const val DEFAULT_VERIFICATION_WINDOW_SECONDS = 60
 const val SLOT_DURATION_MS = 100L
-const val NUM_SLOTS = 200
+const val NUM_SLOTS = 600
 const val MAX_CLOCK_SKEW_SECONDS = 30L
 const val DEFAULT_ADVERTISING_INTERVAL_MS = 200
 const val MIN_RSSI_SAMPLES = 10
@@ -37,6 +37,12 @@ const val FRAGMENT_TRANSFER_TIMEOUT_MS = 5000L
 const val MAX_RETRY_COUNT = 5
 const val RETRY_MAX_SLOTS = 64
 const val RETRY_JITTER_BOUND = 10
+
+/**
+ * Exception thrown when a transient BLE GATT connection or transport error occurs,
+ * indicating that the operation should be retried via [antiproxy.core.scheduling.RetryScheduler].
+ */
+open class GattTransportException(message: String, cause: Throwable? = null) : Exception(message, cause)
 
 /**
  * Unsigned session representation. Contains the session fields

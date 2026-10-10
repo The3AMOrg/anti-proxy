@@ -202,7 +202,11 @@ class StudentGattClient(private val context: Context) {
         }
     }
 
-    suspend fun writeProofEnvelope(envelopeBytes: ByteArray, transferId: UShort = 1u, timeoutMs: Long = 8_000L) = opMutex.withLock {
+    suspend fun writeProofEnvelope(
+        envelopeBytes: ByteArray,
+        transferId: UShort = kotlin.random.Random.nextInt(1, 65535).toUShort(),
+        timeoutMs: Long = 8_000L
+    ) = opMutex.withLock {
         val g = gatt ?: error("Not connected")
         val service = g.getService(SERVICE_UUID) ?: error("Service not found")
         val proofChar = service.getCharacteristic(PROOF_CHAR_UUID) ?: error("Proof characteristic not found")

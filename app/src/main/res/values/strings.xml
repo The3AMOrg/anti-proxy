@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">AntiProxy</string>
+    <string name="default_web_client_id" translatable="false">placeholder_web_client_id</string>
 </resources>
