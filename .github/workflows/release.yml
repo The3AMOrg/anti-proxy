@@ -50,8 +50,8 @@ jobs:
           distribution: temurin
           java-version: "21"
 
-      - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+      # The GitHub Ubuntu image already has the Android SDK and accepted licences; setup-android@v3
+      # fails there trying to reinstall the deprecated "tools" package.
 
       - name: Decode keystore and Google services config
         env:
