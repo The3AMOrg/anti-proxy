@@ -28,7 +28,7 @@ fun encodeSessionSigned(session: SessionSigned): ByteArray {
 
 fun decodeSessionSigned(data: ByteArray): SessionSigned {
     require(data.size == SESSION_SIGNED_SIZE) { "SessionSigned must be exactly $SESSION_SIGNED_SIZE bytes" }
-    require(data[0] == PROTOCOL_VERSION) { "Unsupported protocol version: ${data[0]}" }
+    require(data[0] == PROTOCOL_VERSION) { "You and your teacher are on different app versions. Update the app." }
     
     var offset = 1
     val authorityKeyId = getBytes(data, offset, KEY_ID_SIZE)

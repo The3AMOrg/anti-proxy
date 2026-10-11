@@ -40,7 +40,7 @@ class SessionCodecTest {
     @Test
     fun testInvalidVersion() {
         val bytes = ByteArray(SESSION_SIGNED_SIZE)
-        bytes[0] = 0x02
+        bytes[0] = 0x7F
         assertFailsWith<IllegalArgumentException> {
             decodeSessionSigned(bytes)
         }

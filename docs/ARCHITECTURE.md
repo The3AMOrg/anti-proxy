@@ -58,7 +58,7 @@ The `:core` module contains zero Android SDK dependencies (`android.*`). It targ
 - **`attendance/`**:
   - `ProofValidator.kt`: The Authority's strict 13-step verification pipeline.
   - `SessionValidator.kt`: Student-side verification of the Authority's session signature and temporal validity.
-  - `RssiStats.kt`: Deterministic fixed-point arithmetic for signed Q1 mean (0.5 dBm precision) and unsigned Q8.8 variance.
+  - `RssiStats.kt`: Deterministic fixed-point arithmetic for Q1 mean (0.5 dBm steps, 0 to −127.5 dBm) and unsigned Q8.8 variance.
   - `ClockGuard.kt`: Wall-clock rollback detection enforcing monotonic time.
   - `IdempotencyKey.kt`: Deduplication hash computation:
     $$H = \text{SHA-256}(\text{"antiproxy-attendance-v1"} \mathbin{\Vert} \text{authority\_device\_id} \mathbin{\Vert} \text{session\_id} \mathbin{\Vert} \text{student\_device\_key\_id})$$

@@ -8,7 +8,9 @@ import antiproxy.core.crypto.computeKeyId
 import antiproxy.core.storage.AttendanceRecord
 import com.google.firebase.auth.FirebaseAuth
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -24,6 +26,7 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.ap.protocol.keystore.AndroidKeyManager
 import org.ap.protocol.keystore.KeyAliases
@@ -94,6 +97,12 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Session docs this phone opened, by classroom id. */
     private val openSessions = mutableMapOf<String, String>()
+    /** Timers that close each open session when its time is up. */
+    private val expiries = mutableMapOf<String, Job>()
+
+    /** Member uids verified in each class's current session, so the teacher's list is live. */
+    private val _present = MutableStateFlow<Map<String, Set<String>>>(emptyMap())
+    val present: StateFlow<Map<String, Set<String>>> = _present.asStateFlow()
     private val dismissedSessions = MutableStateFlow<Set<String>>(emptySet())
 
     /** Open sessions for classes where this student is approved. Ends once the session time is up. */
@@ -232,23 +241,26 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
         _messages.emit("Removed ${member.name} from ${classroom.name}.")
     }
 
-    /** Opens the session so members get the prompt. The caller starts the BLE broadcast. */
+    /** Opens the session so members get the prompt, and closes it when the time is up. The caller starts the BLE broadcast. */
     fun startAttendance(classroom: Classroom) = launchSafely {
         val sid = UUID.randomUUID().toString()
         repo.openSession(classroom.id, sid, System.currentTimeMillis() + ATTENDANCE_MS)
         openSessions[classroom.id] = sid
+        _present.update { it + (classroom.id to emptySet()) }
+        expiries[classroom.id]?.cancel()
+        expiries[classroom.id] = viewModelScope.launch {
+            delay(ATTENDANCE_MS)
+            endAttendance(classroom)
+        }
     }
 
     /** Uploads a verified check-in under the open session. Matches the device key to a roster member. */
     fun recordAttendance(classroomId: String, record: AttendanceRecord) {
         val sid = openSessions[classroomId] ?: return
         val member = memberFor(classroomId, record) ?: return
+        _present.update { it + (classroomId to it[classroomId].orEmpty() + member.uid) }
         launchSafely { repo.writeRecord(classroomId, sid, member.uid, record) }
     }
-
-    /** Names of the students verified so far, newest first, for the teacher's live list. */
-    fun presentNames(classroomId: String, records: List<AttendanceRecord>): List<String> =
-        records.mapNotNull { memberFor(classroomId, it)?.name }.distinct()
 
     /** A student's own records that came from this class's teacher phone. */
     fun recordsFor(classroom: Classroom, records: List<AttendanceRecord>): List<AttendanceRecord> {
@@ -260,8 +272,10 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
         teaching.value.firstOrNull { it.classroom.id == classroomId }?.members
             ?.firstOrNull { m -> decode(m.devicePublicKey)?.let { computeKeyId(it).bytes.contentEquals(record.deviceKeyId) } == true }
 
-    fun endAttendance(classroom: Classroom) = launchSafely {
-        openSessions.remove(classroom.id)?.let { repo.closeSession(classroom.id, it) }
+    /** Ends the session, by the teacher's tap or when its time runs out. Safe to call twice. */
+    fun endAttendance(classroom: Classroom) {
+        expiries.remove(classroom.id)?.cancel()
+        launchSafely { openSessions.remove(classroom.id)?.let { repo.closeSession(classroom.id, it) } }
     }
 
     fun deleteClassroom(classroom: Classroom) = launchSafely {

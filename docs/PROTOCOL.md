@@ -28,7 +28,7 @@ The Authority creates and signs this structure at the start of an attendance ses
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  Version(0x01)|          Authority Key ID (Bytes 0..14)        |
+|  Version(0x02)|          Authority Key ID (Bytes 0..14)        |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |AuthKeyID(15)  |              Session ID (16 Bytes)            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -49,7 +49,7 @@ The Authority creates and signs this structure at the start of an attendance ses
 #### Field Layout:
 | Byte Offset | Field Name | Type | Size | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `0` | `version` | `uint8` | 1 | Protocol version (`0x01`). |
+| `0` | `version` | `uint8` | 1 | Protocol version (`0x02`). |
 | `1..16` | `authority_key_id` | `byte[16]` | 16 | Truncated SHA-256 of Authority public key. |
 | `17..32` | `session_id` | `byte[16]` | 16 | Cryptographically random unique session ID. |
 | `33..48` | `nonce` | `byte[16]` | 16 | Cryptographically random session nonce. |
@@ -69,7 +69,7 @@ The student device constructs this payload representing physical presence eviden
  0                   1                   2                   3
  0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1 2 3 4 5 6 7 8 9 0 1
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-|  Version(0x01)|              Session ID (16 Bytes)            |
+|  Version(0x02)|              Session ID (16 Bytes)            |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
 |                      Session Nonce (16 Bytes)                 |
 +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
@@ -84,11 +84,11 @@ The student device constructs this payload representing physical presence eviden
 #### Field Layout:
 | Byte Offset | Field Name | Type | Size | Description |
 | :--- | :--- | :--- | :--- | :--- |
-| `0` | `version` | `uint8` | 1 | Protocol version (`0x01`). |
+| `0` | `version` | `uint8` | 1 | Protocol version (`0x02`). |
 | `1..16` | `session_id` | `byte[16]` | 16 | Must match Authority's active `session_id`. |
 | `17..32` | `nonce` | `byte[16]` | 16 | Must match Authority's active `nonce`. |
 | `33..48` | `device_key_id` | `byte[16]` | 16 | Truncated SHA-256 of Student device public key. |
-| `49` | `rssi_mean_q1` | `int8` | 1 | Signed Q1 fixed-point RSSI mean ($0.5\text{ dBm}$ step). |
+| `49` | `rssi_mean_q1` | `uint8` | 1 | RSSI mean in $0.5\text{ dBm}$ steps below 0 dBm ($\mu = -q/2$, 0 to −127.5 dBm); clamped, never rejected by the encoder. v1 used a signed byte that stopped at −64 dBm, about a metre away. |
 | `50..51` | `rssi_variance_q8_8`| `uint16`| 2 | Unsigned Q8.8 fixed-point sample variance. |
 | `52..53` | `sample_count` | `uint16` | 2 | Number of RSSI samples gathered ($N \ge 10$). |
 | `54` | `proof_flags` | `uint8` | 1 | Reserved flags (must be `0x00`). |
@@ -145,7 +145,7 @@ Status indications emitted on `STATUS_CHAR` consist of a single byte:
 | :--- | :--- | :--- |
 | `0x00` | `SUCCESS` | Attendance verified and durably committed to SQLite WAL. |
 | `0x01` | `MALFORMED_FRAME` | Frame length invalid, unknown format, or header malformed. |
-| `0x02` | `UNSUPPORTED_VERSION`| Protocol version byte $\ne 0x01$. |
+| `0x02` | `UNSUPPORTED_VERSION`| Protocol version byte $\ne 0x02$. |
 | `0x03` | `UNKNOWN_SESSION` | Specified `session_id` does not exist on Authority. |
 | `0x04` | `SESSION_EXPIRED` | Submission arrived after session `expires_at` window. |
 | `0x05` | `NONCE_MISMATCH` | Proof nonce does not match Authority's active session nonce. |

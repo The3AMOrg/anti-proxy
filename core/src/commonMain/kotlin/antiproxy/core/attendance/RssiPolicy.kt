@@ -30,8 +30,9 @@ data class RssiPolicy(
     companion object {
         /** Default policy for M1. */
         val DEFAULT = RssiPolicy(
-            policyVersion = 1,
-            minMeanRssi = -85.0,
+            policyVersion = 2,
+            // A 10-15 m classroom reads about -70 to -90 dBm; calibrate in a real room (see docs/PROTOCOL.md)
+            minMeanRssi = -90.0,
             maxVariance = 200.0,
             minSampleCount = 10
         )

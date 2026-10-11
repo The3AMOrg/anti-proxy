@@ -3,6 +3,7 @@
 package org.ap.protocol.ui
 
 import android.Manifest
+import android.bluetooth.BluetoothAdapter
 import android.bluetooth.BluetoothManager
 import android.content.Context
 import android.content.Intent
@@ -104,9 +105,15 @@ private fun Root(account: AccountViewModel, state: AccountState, joinCode: Strin
         wasSignedIn = signedIn
     }
     val celebrate = signedIn && (celebrating || !wasSignedIn)
+    val context = LocalContext.current
+    val permissions = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
+        account.markPermissionsAsked()
+    }
     val stage = when {
         !signedIn || celebrate -> Stage.SignIn
         state.role == null -> Stage.Role
+        // Once, after the role, and only while something is still missing
+        !state.permissionsAsked && blePermissions(state.role == AppRole.Instructor).any { !context.granted(it) } -> Stage.Permissions
         else -> Stage.Main
     }
     AnimatedContent(targetState = stage, label = "stage") { target ->
@@ -119,12 +126,16 @@ private fun Root(account: AccountViewModel, state: AccountState, joinCode: Strin
                 onCelebrated = { celebrating = false }
             )
             Stage.Role -> RoleScreen(name = state.displayName, onChoose = account::setRole)
+            Stage.Permissions -> NearbyPermissionsScreen(
+                onAllow = { permissions.launch(blePermissions(state.role == AppRole.Instructor).toTypedArray()) },
+                onLater = account::markPermissionsAsked
+            )
             Stage.Main -> AntiProxyApp(account, state, joinCode, onJoinHandled)
         }
     }
 }
 
-private enum class Stage { SignIn, Role, Main }
+private enum class Stage { SignIn, Role, Permissions, Main }
 
 /** Where the user is; depth decides which way the transition slides. */
 private sealed interface Screen {
@@ -133,10 +144,12 @@ private sealed interface Screen {
     data class Class(val id: String) : Screen { override val depth = 1 }
     data object Settings : Screen { override val depth = 1 }
     data object About : Screen { override val depth = 2 }
+    data class Roster(val id: String) : Screen { override val depth = 2 }
 
-    /** Where Back goes. About is only reachable from Settings. */
+    /** Where Back goes. About is only reachable from Settings; the roster goes back to its class. */
     fun parent(): Screen = when (this) {
         About -> Settings
+        is Roster -> Class(id)
         else -> Home
     }
 }
@@ -147,9 +160,9 @@ private fun blePermissions(teacher: Boolean): List<String> = buildList {
         add(Manifest.permission.BLUETOOTH_SCAN)
         add(Manifest.permission.BLUETOOTH_CONNECT)
         if (teacher) add(Manifest.permission.BLUETOOTH_ADVERTISE)
-    } else {
-        add(Manifest.permission.ACCESS_FINE_LOCATION)
     }
+    // Android won't report nearby Bluetooth devices without location, on any version
+    add(Manifest.permission.ACCESS_FINE_LOCATION)
     if (teacher && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) add(Manifest.permission.POST_NOTIFICATIONS)
 }
 
@@ -184,6 +197,7 @@ private fun AntiProxyApp(
     val joined by classVm.joined.collectAsStateWithLifecycle()
     val invite by classVm.invite.collectAsStateWithLifecycle()
     val prompts by classVm.prompts.collectAsStateWithLifecycle()
+    val present by classVm.present.collectAsStateWithLifecycle()
 
     val snackbar = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
@@ -208,6 +222,7 @@ private fun AntiProxyApp(
     }
 
     var openClassId by rememberSaveable { mutableStateOf<String?>(null) }
+    var rosterOf by rememberSaveable { mutableStateOf<String?>(null) }
     var showSettings by rememberSaveable { mutableStateOf(false) }
     var showAbout by rememberSaveable { mutableStateOf(false) }
     var attendingId by rememberSaveable { mutableStateOf<String?>(null) }
@@ -226,6 +241,13 @@ private fun AntiProxyApp(
         if (required.all(context::granted)) action?.invoke()
         else showMessage("Allow Nearby devices so AntiProxy can use Bluetooth. You can do it in Settings.")
     }
+    var afterBluetooth by remember { mutableStateOf<(() -> Unit)?>(null) }
+    val bluetoothLauncher = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        val action = afterBluetooth
+        afterBluetooth = null
+        if (context.bluetoothOn()) action?.invoke()
+        else showMessage("Bluetooth is needed for attendance.")
+    }
     fun withBluetooth(teacher: Boolean, action: () -> Unit) {
         val wanted = blePermissions(teacher)
         val required = wanted.filter { it != Manifest.permission.POST_NOTIFICATIONS }
@@ -235,8 +257,11 @@ private fun AntiProxyApp(
                 askedTeacher = teacher
                 permissionLauncher.launch(wanted.filterNot(context::granted).toTypedArray())
             }
-            !context.bluetoothOn() ->
-                showMessage(if (teacher) "Turn on Bluetooth to take attendance." else "Turn on Bluetooth to mark attendance.")
+            // Asks the system to switch Bluetooth on, the way Maps asks for location, then carries on with the action
+            !context.bluetoothOn() -> {
+                afterBluetooth = action
+                bluetoothLauncher.launch(Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE))
+            }
             else -> action()
         }
     }
@@ -271,6 +296,7 @@ private fun AntiProxyApp(
     val screen: Screen = when {
         showAbout -> Screen.About
         showSettings -> Screen.Settings
+        rosterOf != null && rosterOf == openClassId && teaching.any { it.classroom.id == rosterOf } -> Screen.Roster(rosterOf!!)
         openClassId != null && (
             if (role == AppRole.Instructor) teaching.any { it.classroom.id == openClassId }
             else joined.any { it.classroom.id == openClassId }
@@ -286,6 +312,7 @@ private fun AntiProxyApp(
         when {
             showAbout -> showAbout = false
             showSettings -> showSettings = false
+            rosterOf != null -> rosterOf = null
             else -> openClassId = null
         }
     }
@@ -319,6 +346,16 @@ private fun AntiProxyApp(
                 onChangelog = updateVm::openChangelog,
                 onCheckForUpdates = { updateVm.check(manual = true) }
             )
+
+            is Screen.Roster -> {
+                val roster = teaching.firstOrNull { it.classroom.id == s.id }
+                if (roster != null) AttendanceRosterScreen(
+                    classroom = roster.classroom,
+                    members = roster.members,
+                    presentIds = present[s.id].orEmpty(),
+                    onBack = { rosterOf = null }
+                )
+            }
 
             Screen.Settings -> SettingsScreen(
                 name = state.displayName.orEmpty(),
@@ -359,11 +396,11 @@ private fun AntiProxyApp(
                             onBack = { openClassId = null },
                             teacher = TeacherControls(
                                 attending = attending,
-                                presentCount = session.attendanceCount,
-                                presentNames = if (attending) classVm.presentNames(c.id, session.recentRecords) else emptyList(),
+                                presentIds = if (attending) present[c.id].orEmpty() else emptySet(),
                                 activeSession = session.activeSession.takeIf { attending },
                                 onTakeAttendance = { takeAttendance(c) },
                                 onEndAttendance = { endAttendance(c) },
+                                onOpenRoster = { rosterOf = c.id },
                                 onResetCode = { classVm.resetCode(c) },
                                 onApprove = { classVm.approveDevice(c, it) },
                                 onRemove = { classVm.removeMember(c, it) },

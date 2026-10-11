@@ -16,7 +16,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.rounded.Bluetooth
 import androidx.compose.material.icons.rounded.CoPresent
+import androidx.compose.material.icons.rounded.LocationOn
 import androidx.compose.material.icons.automirrored.rounded.Login
 import androidx.compose.material.icons.rounded.School
 import androidx.compose.material.icons.rounded.VerifiedUser
@@ -29,6 +31,7 @@ import androidx.compose.material3.MaterialShapes
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.toShape
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -138,6 +141,68 @@ fun SignInScreen(
                 textAlign = TextAlign.Center,
                 modifier = Modifier.semantics { liveRegion = LiveRegionMode.Polite }
             )
+        }
+    }
+}
+
+/** Asked once, right after the role, so attendance never stops to ask for permissions later. */
+@Composable
+fun NearbyPermissionsScreen(onAllow: () -> Unit, onLater: () -> Unit) {
+    OnboardingFrame {
+        Box(
+            Modifier
+                .padding(top = 48.dp)
+                .size(128.dp)
+                .clip(MaterialShapes.Clover4Leaf.toShape())
+                .background(MaterialTheme.colorScheme.secondaryContainer),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Rounded.Bluetooth,
+                contentDescription = null,
+                tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                modifier = Modifier.size(56.dp)
+            )
+        }
+        Text(
+            "Allow nearby access",
+            style = MaterialTheme.typography.headlineLarge,
+            textAlign = TextAlign.Center,
+            modifier = Modifier.semantics { heading() }
+        )
+        Text(
+            "Attendance is proven over Bluetooth, so AntiProxy needs a few permissions to check that you're in the room.",
+            style = MaterialTheme.typography.bodyLarge,
+            textAlign = TextAlign.Center,
+            color = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        PermissionLine(
+            Icons.Rounded.Bluetooth,
+            "Nearby devices",
+            "Find your class and exchange attendance signals over Bluetooth."
+        )
+        PermissionLine(
+            Icons.Rounded.LocationOn,
+            "Location",
+            "Android needs it to scan for Bluetooth devices. AntiProxy never tracks where you are."
+        )
+        ActionButton(
+            text = "Allow",
+            icon = Icons.Rounded.Bluetooth,
+            onClick = onAllow,
+            modifier = Modifier.fillMaxWidth()
+        )
+        TextButton(onClick = onLater) { Text("Not now") }
+    }
+}
+
+@Composable
+private fun PermissionLine(icon: ImageVector, title: String, detail: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(16.dp)) {
+        Icon(icon, contentDescription = null, tint = MaterialTheme.colorScheme.primary)
+        Column {
+            Text(title, style = MaterialTheme.typography.titleMedium)
+            Text(detail, style = MaterialTheme.typography.bodyMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }

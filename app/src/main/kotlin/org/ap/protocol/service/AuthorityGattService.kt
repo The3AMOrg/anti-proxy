@@ -70,6 +70,7 @@ class AuthorityGattService : Service() {
                 startSession(keyAlias, duration)
             }
             ACTION_STOP -> {
+                expiry?.cancel()
                 stopSession()
                 stopSelf()
             }
@@ -77,8 +78,11 @@ class AuthorityGattService : Service() {
         return START_NOT_STICKY
     }
 
+    private var expiry: Job? = null
+
     fun startSession(keyAlias: String, durationSeconds: Int = 300) {
         if (_state.value.isRunning) return
+        expiry?.cancel() // a timer left from an earlier session must not end this one
 
         wakeLock?.acquire(durationSeconds * 1000L + 30_000L)
 
@@ -139,6 +143,13 @@ class AuthorityGattService : Service() {
                 )
                 stopSession()
             }
+        }
+
+        // The broadcast stops when the time is up, even if nobody taps End
+        expiry = scope.launch {
+            delay(durationSeconds * 1000L)
+            stopSession()
+            stopSelf()
         }
     }
 

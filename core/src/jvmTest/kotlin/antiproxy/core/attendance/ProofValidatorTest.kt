@@ -79,7 +79,7 @@ class ProofValidatorTest {
         )
 
         // 2. Protocol version
-        val badVersionProof = proof.copy(protocolVersion = 0x02.toByte())
+        val badVersionProof = proof.copy(protocolVersion = 0x7F.toByte())
         val badVersionBytes = encodeProofEnvelope(ProofEnvelope(badVersionProof, sig.bytes))
         assertEquals(
             StatusCode.UNSUPPORTED_VERSION,

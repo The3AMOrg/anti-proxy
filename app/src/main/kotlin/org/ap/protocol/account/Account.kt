@@ -35,6 +35,8 @@ data class AccountState(
     val displayName: String? = null,
     val role: AppRole? = null,
     val themeMode: ThemeMode = ThemeMode.System,
+    /** The one-time "allow nearby access" step after choosing a role has been answered (or skipped). */
+    val permissionsAsked: Boolean = false,
     val signingIn: Boolean = false,
     val error: String? = null
 )
@@ -51,7 +53,8 @@ class AccountViewModel(app: Application) : AndroidViewModel(app) {
             user = auth.currentUser,
             displayName = auth.currentUser?.displayName,
             role = savedRole(),
-            themeMode = prefs.getString(KEY_THEME, null)?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.System
+            themeMode = prefs.getString(KEY_THEME, null)?.let { runCatching { ThemeMode.valueOf(it) }.getOrNull() } ?: ThemeMode.System,
+            permissionsAsked = prefs.getBoolean(KEY_PERMISSIONS_ASKED, false)
         )
     )
     val state: StateFlow<AccountState> = _state.asStateFlow()
@@ -119,6 +122,11 @@ class AccountViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(role = role) }
     }
 
+    fun markPermissionsAsked() {
+        prefs.edit { putBoolean(KEY_PERMISSIONS_ASKED, true) }
+        _state.update { it.copy(permissionsAsked = true) }
+    }
+
     fun setThemeMode(mode: ThemeMode) {
         prefs.edit { putString(KEY_THEME, mode.name) }
         _state.update { it.copy(themeMode = mode) }
@@ -151,5 +159,6 @@ class AccountViewModel(app: Application) : AndroidViewModel(app) {
     private companion object {
         const val KEY_ROLE = "role"
         const val KEY_THEME = "theme"
+        const val KEY_PERMISSIONS_ASKED = "permissions_asked"
     }
 }

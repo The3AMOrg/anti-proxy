@@ -2,6 +2,7 @@
 
 package org.ap.protocol.ui
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -19,6 +20,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.rounded.ArrowBack
 import androidx.compose.material.icons.automirrored.rounded.ExitToApp
+import androidx.compose.material.icons.automirrored.rounded.KeyboardArrowRight
 import androidx.compose.material.icons.rounded.CheckCircle
 import androidx.compose.material.icons.rounded.Delete
 import androidx.compose.material.icons.rounded.Edit
@@ -60,7 +62,9 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.heading
 import androidx.compose.ui.semantics.semantics
@@ -83,11 +87,12 @@ import java.util.Locale
 /** What only the class's teacher can see and do. */
 class TeacherControls(
     val attending: Boolean,
-    val presentCount: Int,
-    val presentNames: List<String>,
+    /** Uids of the members who have checked in to the running session. */
+    val presentIds: Set<String>,
     val activeSession: Session?,
     val onTakeAttendance: () -> Unit,
     val onEndAttendance: () -> Unit,
+    val onOpenRoster: () -> Unit,
     val onResetCode: () -> Unit,
     val onApprove: (Member) -> Unit,
     val onRemove: (Member) -> Unit,
@@ -180,7 +185,7 @@ fun ClassScreen(
             when (tab) {
                 ClassTab.Attendance -> {
                     if (teacher != null) {
-                        animatedItem("attendance") { TeacherAttendanceCard(classroom, teacher) }
+                        animatedItem("attendance") { TeacherAttendanceCard(classroom, teacher, members) }
                         animatedItem("code") { JoinCodeCard(classroom, onReset = { confirmReset = true }) }
                     }
                     if (student != null) {
@@ -335,20 +340,37 @@ private fun ClassBanner(classroom: Classroom, live: Boolean, showTeacher: Boolea
 }
 
 @Composable
-private fun TeacherAttendanceCard(classroom: Classroom, teacher: TeacherControls) {
+private fun TeacherAttendanceCard(classroom: Classroom, teacher: TeacherControls, members: List<Member>) {
     SectionCard("Attendance") {
         if (teacher.attending) {
-            Text("Attendance running · ${teacher.presentCount} present", style = MaterialTheme.typography.titleMedium)
+            val present = members.filter { it.uid in teacher.presentIds }
+            Text("Attendance running · ${present.size} present", style = MaterialTheme.typography.titleMedium)
             teacher.activeSession?.let { TimeLeft(issuedAt = it.issuedAt, expiresAt = it.expiresAt) }
-            if (teacher.presentNames.isNotEmpty()) {
-                Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    teacher.presentNames.forEach { name ->
-                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Icon(Icons.Rounded.CheckCircle, contentDescription = null, tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-                            Text(name, style = MaterialTheme.typography.bodyLarge)
-                        }
-                    }
-                }
+            // One line that never changes height: names truncate, the count and arrow stay at the end,
+            // so the End button below doesn't move as students check in
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 48.dp)
+                    .clip(MaterialTheme.shapes.medium)
+                    .clickable(role = Role.Button, onClickLabel = "See everyone in the class", onClick = teacher.onOpenRoster),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                Text(
+                    if (present.isEmpty()) "No one has checked in yet" else present.joinToString(", ") { it.name },
+                    style = MaterialTheme.typography.bodyLarge,
+                    color = if (present.isEmpty()) MaterialTheme.colorScheme.onSurfaceVariant else MaterialTheme.colorScheme.onSurface,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f)
+                )
+                Text(
+                    "${present.size}",
+                    style = MaterialTheme.typography.titleMedium,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                Icon(Icons.AutoMirrored.Rounded.KeyboardArrowRight, contentDescription = null, tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             ActionButton(
                 text = "End attendance",

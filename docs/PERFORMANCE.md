@@ -26,7 +26,7 @@ AntiProxy avoids instantaneous distance calculation. Instead, it enforces:
 1. **Physical GATT Connection Prerequisite**: The student must establish a physical BLE connection to the instructor's device. Indoor BLE range through concrete/brick classroom walls rarely exceeds 12–15 meters.
 2. **Scan-Time Multi-Packet Statistical Sampling**:
    - Collects $N \ge 10$ RSSI samples from the 10 Hz advertising stream.
-   - Calculates fixed-point signed Q1 Mean:
+   - Calculates fixed-point Q1 Mean (0.5 dBm steps below 0 dBm):
      $$\mu = \frac{1}{N} \sum_{i=1}^N \text{RSSI}_i$$
    - Calculates fixed-point unsigned Q8.8 Variance:
      $$\sigma^2 = \frac{1}{N} \sum_{i=1}^N (\text{RSSI}_i - \mu)^2$$

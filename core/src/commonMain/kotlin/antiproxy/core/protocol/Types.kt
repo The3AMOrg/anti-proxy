@@ -1,7 +1,7 @@
 package antiproxy.core.protocol
 
 /** Protocol version byte. */
-const val PROTOCOL_VERSION: Byte = 0x01
+const val PROTOCOL_VERSION: Byte = 0x02 // v2: RSSI mean encoding covers 0 to -127.5 dBm
 
 // Wire format sizes
 const val SESSION_SIGNED_SIZE = 133
@@ -116,7 +116,7 @@ data class Proof(
     val sessionId: ByteArray,         // 16 bytes
     val nonce: ByteArray,             // 16 bytes
     val deviceKeyId: ByteArray,       // 16 bytes
-    val rssiMeanQ1: Byte,             // signed Q1 fixed-point dBm
+    val rssiMeanQ1: Byte,             // unsigned half-dB steps below 0 dBm (see toQ1)
     val rssiVarianceQ8_8: UShort,     // unsigned Q8.8 fixed-point dBm²
     val sampleCount: UShort,          // number of RSSI samples
     val proofFlags: Byte              // reserved flags
