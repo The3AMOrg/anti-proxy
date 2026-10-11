@@ -69,6 +69,7 @@ class AndroidStudentStore(context: Context) : StudentStore {
                 put("sample_count", record.sampleCount)
                 put("recorded_at", record.recordedAt)
                 put("idempotency_key", record.idempotencyKey)
+                put("classroom_id", record.classroomId)
             }
             db.insertWithOnConflict("attendance_records", null, recordValues, SQLiteDatabase.CONFLICT_REPLACE)
 
@@ -96,7 +97,7 @@ class AndroidStudentStore(context: Context) : StudentStore {
         db.rawQuery(
             """
             SELECT session_id, device_key_id, authority_key_id, policy_id, policy_version,
-                   rssi_mean, rssi_variance, sample_count, recorded_at, idempotency_key
+                   rssi_mean, rssi_variance, sample_count, recorded_at, idempotency_key, classroom_id
             FROM attendance_records
             ORDER BY recorded_at DESC
             LIMIT ?
@@ -115,7 +116,8 @@ class AndroidStudentStore(context: Context) : StudentStore {
                         rssiVariance = cursor.getDouble(6),
                         sampleCount = cursor.getInt(7),
                         recordedAt = cursor.getLong(8),
-                        idempotencyKey = cursor.getBlob(9)
+                        idempotencyKey = cursor.getBlob(9),
+                        classroomId = if (cursor.isNull(10)) null else cursor.getString(10)
                     )
                 )
             }

@@ -5,7 +5,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 
 private const val DB_NAME = "antiproxy_app.db"
-private const val DB_VERSION = 1
+private const val DB_VERSION = 2
 
 /**
  * SQLite open helper configuring WAL mode and foreign keys.

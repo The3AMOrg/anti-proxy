@@ -36,6 +36,8 @@ class StudentFlow(
     private val keyAlias: String,
     private val studentStore: AndroidStudentStore,
     private val knownAuthorityKeys: Map<KeyId, PublicKeyBytes>,
+    /** The class being checked in to, saved with the record so its history stays its own. */
+    private val classroomId: String? = null,
     private val verifier: Verifier = keyManager.createVerifier()
 ) : StudentApi {
 
@@ -70,7 +72,11 @@ class StudentFlow(
         onStateChanged?.invoke(StudentCheckInState.Scanning)
 
         // 1. Pre-connection passive scan & RSSI sampling
-        val discovered = scanForAuthority(context, requiredSamples = MIN_RSSI_SAMPLES)
+        val discovered = scanForAuthority(
+            context,
+            beaconIds = knownAuthorityKeys.keys.map { beaconIdOf(it.bytes) },
+            requiredSamples = MIN_RSSI_SAMPLES
+        )
         if (discovered == null) {
             onStateChanged?.invoke(StudentCheckInState.Error("No Authority beacon found"))
             return AttendanceResult.NoAuthorityFound
@@ -225,7 +231,8 @@ class StudentFlow(
                     authorityDeviceId = session.authorityKeyId,
                     sessionId = session.sessionId,
                     studentDeviceKeyId = deviceKeyId.bytes
-                )
+                ),
+                classroomId = classroomId
             )
 
             val syncEvent = SyncEvent(

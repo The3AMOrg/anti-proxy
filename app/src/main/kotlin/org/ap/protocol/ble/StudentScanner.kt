@@ -24,6 +24,7 @@ data class DiscoveredAuthority(
  */
 suspend fun scanForAuthority(
     context: Context,
+    beaconIds: List<ByteArray>,
     requiredSamples: Int = MIN_RSSI_SAMPLES,
     timeoutMs: Long = 10_000L
 ): DiscoveredAuthority? {
@@ -50,7 +51,11 @@ suspend fun scanForAuthority(
             val scanCallback = object : ScanCallback() {
                 override fun onScanResult(callbackType: Int, result: ScanResult) {
                     val address = result.device.address
+                    // Every teacher shares the service UUID; lock on only once the scan response names our teacher.
+                    // After that, plain adverts from the same address count too, so sampling stays fast.
                     if (targetAddress == null) {
+                        val id = result.scanRecord?.getServiceData(SERVICE_PARCEL_UUID) ?: return
+                        if (beaconIds.none { it.contentEquals(id) }) return
                         targetAddress = address
                     }
 

@@ -35,7 +35,8 @@ class AuthorityAdvertiser(private val context: Context) {
         }
     }
 
-    suspend fun start(sessionSignedBytes: ByteArray, onProofReceived: ProofReceivedCallback) {
+    /** [beaconId] tells students whose beacon this is, so a class next door never gets picked up. */
+    suspend fun start(sessionSignedBytes: ByteArray, beaconId: ByteArray, onProofReceived: ProofReceivedCallback) {
         val adapter = bluetoothAdapter ?: error("Bluetooth not supported on this device")
         check(adapter.isEnabled) { "Bluetooth is disabled" }
 
@@ -115,7 +116,13 @@ class AuthorityAdvertiser(private val context: Context) {
             .addServiceUuid(SERVICE_PARCEL_UUID)
             .build()
 
-        adv.startAdvertising(settings, data, advertiseCallback)
+        // The advert is full (flags + 128-bit UUID), so the teacher's id rides in the scan response: 2 + 16 + 8 = 26 of 31 bytes
+        val scanResponse = AdvertiseData.Builder()
+            .setIncludeDeviceName(false)
+            .addServiceData(SERVICE_PARCEL_UUID, beaconId)
+            .build()
+
+        adv.startAdvertising(settings, data, scanResponse, advertiseCallback)
         this.advertiser = adv
     }
 

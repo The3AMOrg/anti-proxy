@@ -80,7 +80,8 @@ service cloud.firestore {
         && request.resource.data.teacherUid == request.auth.uid
         && getAfter(classroom(request.resource.data.classroomId)).data.teacherUid == request.auth.uid
         && getAfter(classroom(request.resource.data.classroomId)).data.joinCode == code;
-      allow delete: if google() && resource.data.teacherUid == request.auth.uid;
+      // A missing code (deleted by hand) has no resource: deleting it is a no-op, not a denial.
+      allow delete: if google() && (resource == null || resource.data.teacherUid == request.auth.uid);
     }
 
     // ── Classrooms ────────────────────────────────────────────────────────

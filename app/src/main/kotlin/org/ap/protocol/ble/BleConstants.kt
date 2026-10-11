@@ -21,3 +21,6 @@ const val MIN_ATT_MTU = 23
 const val ATT_HEADER_SIZE = 3
 
 fun usablePayload(mtu: Int): Int = (mtu - ATT_HEADER_SIZE).coerceAtLeast(0)
+
+/** First 8 bytes of the teacher's key id, sent in the scan response so students find their own teacher. */
+fun beaconIdOf(authorityKeyId: ByteArray): ByteArray = authorityKeyId.copyOf(8)

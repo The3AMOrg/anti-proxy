@@ -8,12 +8,16 @@ import android.content.ServiceConnection
 import android.os.IBinder
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import antiproxy.core.crypto.PublicKeyBytes
+import antiproxy.core.crypto.computeKeyId
 import antiproxy.core.storage.AttendanceRecord
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import java.util.Base64
+import org.ap.protocol.classroom.Classroom
 import org.ap.protocol.flow.StudentCheckInState
 import org.ap.protocol.flow.StudentFlow
 import org.ap.protocol.keystore.AndroidKeyManager
@@ -70,11 +74,14 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
 
     fun stopSession() = AuthorityGattService.stop(getApplication())
 
-    fun checkIn() {
+    /** Checks in to one class: only that class's teacher is trusted, so a beacon next door is ignored. */
+    fun checkIn(classroom: Classroom) {
         if (_checkIn.value.isBusy) return
+        val classKey = runCatching { computeKeyId(PublicKeyBytes(Base64.getDecoder().decode(classroom.authorityPublicKey))) }.getOrNull()
         val instructors = studentStore.getTrustedAuthorityKeys()
+            .filterKeys { classKey != null && it.bytes.contentEquals(classKey.bytes) }
         if (instructors.isEmpty()) {
-            _checkIn.value = StudentCheckInState.Error("Join your teacher's classroom first.")
+            _checkIn.value = StudentCheckInState.Error("This phone doesn't have ${classroom.teacherName}'s key yet. Open AntiProxy while online and try again.")
             return
         }
         val flow = StudentFlow(
@@ -82,7 +89,8 @@ class MainViewModel(app: Application) : AndroidViewModel(app) {
             keyManager = keyManager,
             keyAlias = KeyAliases.STUDENT,
             studentStore = studentStore,
-            knownAuthorityKeys = instructors
+            knownAuthorityKeys = instructors,
+            classroomId = classroom.id
         )
         flow.onStateChanged = { _checkIn.value = it }
         _checkIn.value = StudentCheckInState.Scanning

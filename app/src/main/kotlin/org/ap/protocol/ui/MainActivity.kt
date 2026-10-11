@@ -280,7 +280,7 @@ private fun AntiProxyApp(
             vm.startSession()
         }
     }
-    val markAttendance: () -> Unit = { withBluetooth(teacher = false) { vm.checkIn() } }
+    val markAttendance: (Classroom) -> Unit = { c -> withBluetooth(teacher = false) { vm.checkIn(c) } }
 
     // Each verified check-in goes to Firestore under the open session; offline it waits in Firestore's queue
     val lastRecord = session.recentRecords.firstOrNull()
@@ -430,7 +430,7 @@ private fun AntiProxyApp(
                                 prompt = prompt,
                                 onMarkAttendance = {
                                     prompt?.let(classVm::dismissPrompt)
-                                    markAttendance()
+                                    markAttendance(c)
                                 },
                                 onUnenroll = { unenrollingId = c.id }
                             )
@@ -518,7 +518,7 @@ private fun AntiProxyApp(
             prompt = prompt,
             onMark = {
                 classVm.dismissPrompt(prompt)
-                markAttendance()
+                markAttendance(prompt.classroom)
             },
             onNotNow = { classVm.dismissPrompt(prompt) }
         )

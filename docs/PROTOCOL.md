@@ -12,6 +12,12 @@ AntiProxy exposes a primary GATT service on the Authority (Instructor) device wi
 | **Status Characteristic** | `63c56110-34fa-4d02-958e-54c4cb940ec8` | `INDICATE`, `READ` | `READ` | 1 byte | Dispatches confirmation ACK or rejection code. |
 | **Client Config (CCCD)** | `00002902-0000-1000-8000-00805f9b34fb` | `READ`, `WRITE` | `READ`, `WRITE` | 2 bytes | Enables indication subscription on Status. |
 
+**Beacon id (scan response).** Every Authority advertises the same service UUID, so the scan response
+carries service data under that UUID: the first 8 bytes of `authority_key_id`. A student checks in to
+one class at a time and locks on only to the beacon whose id matches that class's teacher, so a class
+running next door is never picked up. The Authority then accepts only device keys of the members of the
+class whose attendance is running; anyone else gets `UNKNOWN_DEVICE`.
+
 ---
 
 ## 2. Canonical Wire Formats

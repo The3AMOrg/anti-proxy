@@ -90,7 +90,8 @@ private fun rejectionMessage(status: StatusCode): String = when (status) {
     StatusCode.UNKNOWN_SESSION, StatusCode.SESSION_EXPIRED ->
         "This session isn't running any more. Ask your teacher to start it again."
     StatusCode.NONCE_MISMATCH -> "The session changed while you were checking in. Try again."
-    StatusCode.UNKNOWN_DEVICE -> "Your teacher's phone doesn't know this phone yet. Ask them to open AntiProxy while online."
+    StatusCode.UNKNOWN_DEVICE ->
+        "Your teacher's phone doesn't have you on this class's list. If you just joined, ask them to open AntiProxy while online."
     StatusCode.DEVICE_REVOKED -> "Your teacher has removed this phone."
     StatusCode.INVALID_SIGNATURE -> "Your attendance couldn't be verified. Try again."
     StatusCode.REPLAY, StatusCode.DUPLICATE_ATTENDANCE -> "You're already marked present for this session."

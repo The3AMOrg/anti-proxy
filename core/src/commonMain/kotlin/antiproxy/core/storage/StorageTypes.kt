@@ -54,7 +54,9 @@ data class AttendanceRecord(
     val rssiVariance: Double,
     val sampleCount: Int,
     val recordedAt: Long,             // UTC Unix seconds
-    val idempotencyKey: ByteArray     // SHA-256
+    val idempotencyKey: ByteArray,    // SHA-256
+    /** The class the student checked in to. Student phone only; null on the teacher's side and on older records. */
+    val classroomId: String? = null
 ) {
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
@@ -63,7 +65,8 @@ data class AttendanceRecord(
             authorityKeyId.contentEquals(other.authorityKeyId) && policyId == other.policyId &&
             policyVersion == other.policyVersion && rssiMean == other.rssiMean &&
             rssiVariance == other.rssiVariance && sampleCount == other.sampleCount &&
-            recordedAt == other.recordedAt && idempotencyKey.contentEquals(other.idempotencyKey)
+            recordedAt == other.recordedAt && idempotencyKey.contentEquals(other.idempotencyKey) &&
+            classroomId == other.classroomId
     }
     override fun hashCode(): Int {
         var result = sessionId.contentHashCode()

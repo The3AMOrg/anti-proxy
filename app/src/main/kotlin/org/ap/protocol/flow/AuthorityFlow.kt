@@ -5,6 +5,7 @@ import android.content.Context
 import kotlinx.coroutines.*
 import org.ap.protocol.ble.AuthorityAdvertiser
 import org.ap.protocol.ble.ProofReceivedCallback
+import org.ap.protocol.ble.beaconIdOf
 import org.ap.protocol.keystore.AndroidKeyManager
 import org.ap.protocol.storage.AndroidAuthorityStore
 import antiproxy.core.attendance.*
@@ -128,7 +129,7 @@ class AuthorityFlow(
         this.sessionScope = scope
 
         val adv = AuthorityAdvertiser(context)
-        adv.start(signedBytes, ProofReceivedCallback { device, envelopeData ->
+        adv.start(signedBytes, beaconIdOf(authorityKeyId.bytes), ProofReceivedCallback { device, envelopeData ->
             handleProofReceived(device, envelopeData)
         })
 
@@ -164,7 +165,8 @@ class AuthorityFlow(
         val status = validateProofEnvelope(
             envelopeData = envelopeData,
             sessionLookup = { sid -> authorityStore.getSession(sid) },
-            deviceKeyLookup = { kid -> authorityStore.getStudentKey(kid) },
+            // Only members of the class being taken, not every class this teacher has
+            deviceKeyLookup = { kid -> authorityStore.getStudentKey(kid)?.takeIf { AttendanceRoster.allows(kid) } },
             deviceStatusCheck = { kid ->
                 when {
                     authorityStore.isDeviceRevoked(kid) -> DeviceStatus.REVOKED

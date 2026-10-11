@@ -28,6 +28,7 @@ import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import org.ap.protocol.flow.AttendanceRoster
 import org.ap.protocol.keystore.AndroidKeyManager
 import org.ap.protocol.keystore.KeyAliases
 import org.ap.protocol.storage.AndroidAuthorityStore
@@ -97,6 +98,8 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
 
     /** Session docs this phone opened, by classroom id. */
     private val openSessions = mutableMapOf<String, String>()
+    /** The class whose attendance is running on this phone; only its members may check in. */
+    private var rosterClassId: String? = null
     /** Timers that close each open session when its time is up. */
     private val expiries = mutableMapOf<String, Job>()
 
@@ -178,6 +181,12 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
                 .forEach { (kid, _) -> authorityStore.revokeDevice(kid.bytes) }
         }
         approved.forEach { (kid, pub) -> authorityStore.cacheStudentKey(kid, pub) }
+        refreshRoster(classrooms) // a student approved mid-session can check in straight away
+    }
+
+    private fun refreshRoster(classrooms: List<TeacherClassroom> = teaching.value) {
+        val members = classrooms.firstOrNull { it.classroom.id == rosterClassId }?.members.orEmpty()
+        AttendanceRoster.set(members.mapNotNull { m -> decode(m.devicePublicKey)?.let { computeKeyId(it).bytes } })
     }
 
     private fun syncStudentKeys(classrooms: List<JoinedClassroom>) {
@@ -242,7 +251,14 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     /** Opens the session so members get the prompt, and closes it when the time is up. The caller starts the BLE broadcast. */
-    fun startAttendance(classroom: Classroom) = launchSafely {
+    fun startAttendance(classroom: Classroom) {
+        // Before the broadcast starts, so the first check-in already sees the right list
+        rosterClassId = classroom.id
+        refreshRoster()
+        openSession(classroom)
+    }
+
+    private fun openSession(classroom: Classroom) = launchSafely {
         val sid = UUID.randomUUID().toString()
         repo.openSession(classroom.id, sid, System.currentTimeMillis() + ATTENDANCE_MS)
         openSessions[classroom.id] = sid
@@ -262,10 +278,15 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
         launchSafely { repo.writeRecord(classroomId, sid, member.uid, record) }
     }
 
-    /** A student's own records that came from this class's teacher phone. */
+    /**
+     * A student's own check-ins for this class. Records from before v2 have no class, so they fall back
+     * to matching the teacher's key, and still show under each class that teacher has.
+     */
     fun recordsFor(classroom: Classroom, records: List<AttendanceRecord>): List<AttendanceRecord> {
-        val teacherKey = decode(classroom.authorityPublicKey)?.let { computeKeyId(it).bytes } ?: return emptyList()
-        return records.filter { it.authorityKeyId.contentEquals(teacherKey) }
+        val teacherKey = decode(classroom.authorityPublicKey)?.let { computeKeyId(it).bytes }
+        return records.filter {
+            it.classroomId?.let { id -> id == classroom.id } ?: (teacherKey != null && it.authorityKeyId.contentEquals(teacherKey))
+        }
     }
 
     private fun memberFor(classroomId: String, record: AttendanceRecord): Member? =
@@ -275,6 +296,10 @@ class ClassroomViewModel(app: Application) : AndroidViewModel(app) {
     /** Ends the session, by the teacher's tap or when its time runs out. Safe to call twice. */
     fun endAttendance(classroom: Classroom) {
         expiries.remove(classroom.id)?.cancel()
+        if (rosterClassId == classroom.id) {
+            rosterClassId = null
+            refreshRoster()
+        }
         launchSafely { openSessions.remove(classroom.id)?.let { repo.closeSession(classroom.id, it) } }
     }
 

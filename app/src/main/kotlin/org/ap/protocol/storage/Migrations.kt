@@ -33,6 +33,7 @@ object Migrations {
                 sample_count INTEGER NOT NULL,
                 recorded_at INTEGER NOT NULL,
                 idempotency_key BLOB NOT NULL UNIQUE,
+                classroom_id TEXT,
                 PRIMARY KEY (session_id, device_key_id)
             )
             """.trimIndent()
@@ -110,6 +111,7 @@ object Migrations {
     }
 
     fun migrate(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        // Future schema migrations
+        // v2: a student's check-in remembers its class, so one teacher's classes don't share a history
+        if (oldVersion < 2) db.execSQL("ALTER TABLE attendance_records ADD COLUMN classroom_id TEXT")
     }
 }
