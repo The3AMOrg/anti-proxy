@@ -11,8 +11,8 @@ configure<com.android.build.api.dsl.ApplicationExtension> {
         minSdk = 26
         targetSdk = 35
         // Release tags are v<versionName> (e.g. v1.0.0); the in-app update check compares against it
-        versionCode = 3
-        versionName = "1.0.2"
+        versionCode = 4
+        versionName = "1.0.3"
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 

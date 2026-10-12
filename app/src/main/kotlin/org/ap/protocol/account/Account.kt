@@ -11,6 +11,7 @@ import androidx.credentials.exceptions.NoCredentialException
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.google.android.libraries.identity.googleid.GetGoogleIdOption
+import com.google.android.libraries.identity.googleid.GetSignInWithGoogleOption
 import com.google.android.libraries.identity.googleid.GoogleIdTokenCredential
 import com.google.firebase.auth.FirebaseAuth
 import com.google.firebase.auth.FirebaseUser
@@ -77,14 +78,20 @@ class AccountViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(signingIn = true, error = null) }
         viewModelScope.launch {
             val error = try {
-                val idToken = googleIdToken(activityContext)
+                // The quick bottom sheet finds no account on some phones even when there are several;
+                // the full Google account picker works there, so fall back to it
+                val idToken = try {
+                    googleIdToken(activityContext, fullPicker = false)
+                } catch (_: NoCredentialException) {
+                    googleIdToken(activityContext, fullPicker = true)
+                }
                 val user = auth.signInWithCredential(GoogleAuthProvider.getCredential(idToken, null)).await().user
                 user?.let(::saveProfile)
                 null
             } catch (_: GetCredentialCancellationException) {
                 null // user closed the picker
             } catch (_: NoCredentialException) {
-                "No Google account on this phone. Add one in Settings, then try again."
+                "Couldn't open Google sign-in on this phone. Update Google Play services from the Play Store, then try again."
             } catch (e: Exception) {
                 "Couldn't sign in: ${e.message ?: "unknown error"}"
             }
@@ -132,12 +139,17 @@ class AccountViewModel(app: Application) : AndroidViewModel(app) {
         _state.update { it.copy(themeMode = mode) }
     }
 
-    private suspend fun googleIdToken(context: Context): String {
-        val option = GetGoogleIdOption.Builder()
-            .setFilterByAuthorizedAccounts(false) // first sign-in: let the user pick any account
-            .setServerClientId(context.getString(R.string.default_web_client_id))
-            .setAutoSelectEnabled(false)
-            .build()
+    private suspend fun googleIdToken(context: Context, fullPicker: Boolean): String {
+        val clientId = context.getString(R.string.default_web_client_id)
+        val option = if (fullPicker) {
+            GetSignInWithGoogleOption.Builder(clientId).build()
+        } else {
+            GetGoogleIdOption.Builder()
+                .setFilterByAuthorizedAccounts(false) // first sign-in: let the user pick any account
+                .setServerClientId(clientId)
+                .setAutoSelectEnabled(false)
+                .build()
+        }
         val credential = CredentialManager.create(context)
             .getCredential(context, GetCredentialRequest.Builder().addCredentialOption(option).build())
             .credential
